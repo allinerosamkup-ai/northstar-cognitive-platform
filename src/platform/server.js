@@ -9,6 +9,9 @@ import { ContinuityManager } from "../core/continuity.js";
 import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExistsError } from "./files.js";
 import { Settings } from "./settings.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt } from "../core/document.js";
+import { WorkingSession } from "../core/session.js";
+import { callCount } from "../core/deliberation.js";
+import { assignmentCost } from "../core/assignment.js";
 
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
 
@@ -32,6 +35,7 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
   for (const resident of createResidentProviders(settings.values)) await mesh.addResident(project.id, resident);
   const architect = new CognitiveArchitect(mesh, brain);
   const continuity = new ContinuityManager(mesh, brain);
+  const session = new WorkingSession(mesh, brain);
   const workspace = new Workspace(workspacePath);
   let server;
   const snapshot = async () => ({
@@ -40,8 +44,19 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
     events: await brain.eventsSince(project.id, 0),
     residents: mesh.residents(project.id).map(({ provider, ...resident }) => ({ ...resident, provider: provider.name, live: Boolean(provider.apiKey) })),
     settings: settings.describe(),
-    environment: { dataPath, workspacePath: workspace.root }
+    environment: { dataPath, workspacePath: workspace.root },
+    sessionCost: sessionCost()
   });
+
+  // What a working session will spend, so it is on screen before anyone starts one.
+  const sessionCost = () => {
+    const participants = mesh.residents(project.id).filter(resident => resident.provider.apiKey).length;
+    return {
+      liveParticipants: participants,
+      deliberationCalls: callCount(participants),
+      assignmentCalls: assignmentCost(participants)
+    };
+  };
 
   // Collects the files a person attached, so a build can actually work from them.
   const attachments = async () => (await brain.eventsSince(project.id, 0))
@@ -63,8 +78,6 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
         const event = await mesh.publish(project.id, { type: "decision.created", actorId: "user", payload: { statement: input.statement } });
         return json(response, 201, { event, snapshot: await snapshot() });
       }
-      // One turn of the conversation: record what the user said, then let the room
-      // answer with the chosen topology. A chat UI needs both halves atomically.
       if (request.method === "GET" && url.pathname === "/api/settings") {
         return json(response, 200, settings.describe());
       }
@@ -85,6 +98,69 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       if (request.method === "POST" && url.pathname === "/api/settings/test") {
         const input = await body(request);
         return json(response, 200, await settings.test(input.provider));
+      }
+      // The residents read and answer each other, then one writes the conclusion.
+      // What comes back is a proposal: nothing is decided until a person says so.
+      if (request.method === "POST" && url.pathname === "/api/deliberate") {
+        const input = await body(request);
+        if (!input.question?.trim()) return json(response, 400, { error: "A question is required" });
+        const result = await session.deliberate(project.id, {
+          question: input.question.trim(),
+          synthesisBy: input.synthesisBy,
+          residentIds: input.residentIds
+        });
+        return json(response, 201, { session: result, snapshot: await snapshot() });
+      }
+      // Where the person has the last word: accept the conclusion, or take a
+      // side on something the residents left unresolved.
+      if (request.method === "POST" && url.pathname === "/api/deliberate/resolve") {
+        const input = await body(request);
+        const open = (await brain.getState(project.id)).session;
+        if (!open) return json(response, 400, { error: "There is no open session to resolve" });
+        const statement = (input.decision ?? open.synthesis.conclusion ?? "").trim();
+        if (!statement) return json(response, 400, { error: "A decision is required" });
+
+        await mesh.publish(project.id, {
+          type: "decision.created", actorId: "user",
+          payload: { statement, fromSession: open.sequence, question: open.question }
+        });
+        await mesh.publish(project.id, {
+          type: "session.resolved", actorId: "user",
+          payload: { sequence: open.sequence, accepted: !input.decision }
+        });
+        return json(response, 201, { snapshot: await snapshot() });
+      }
+      if (request.method === "POST" && url.pathname === "/api/assign") {
+        const input = await body(request);
+        const phases = (input.phases ?? []).map(phase => String(phase).trim()).filter(Boolean);
+        if (phases.length < 2) return json(response, 400, { error: "At least two parts are needed to divide the work" });
+        const result = await session.divide(project.id, {
+          phases, residentIds: input.residentIds, dividedBy: input.dividedBy
+        });
+        return json(response, 201, { assignment: result, snapshot: await snapshot() });
+      }
+      // Confirming is what turns a proposed split into something the project
+      // believes; the person may edit it on the way through.
+      if (request.method === "POST" && url.pathname === "/api/assign/confirm") {
+        const input = await body(request);
+        const proposal = (await brain.getState(project.id)).assignment;
+        if (!proposal) return json(response, 400, { error: "There is no proposed division to confirm" });
+        const assignments = input.assignments?.length ? input.assignments : proposal.assignments;
+        if (!assignments.length) return json(response, 400, { error: "An empty division cannot be confirmed" });
+
+        const known = new Set(mesh.residents(project.id).map(resident => resident.id));
+        const unknown = assignments.find(item => !known.has(item.residentId));
+        if (unknown) return json(response, 400, { error: `No such resident: ${unknown.residentId}` });
+
+        const event = await mesh.publish(project.id, {
+          type: "assignment.confirmed", actorId: "user",
+          payload: { kind: "assignment", assignments, phases: proposal.phases, status: "confirmed" }
+        });
+        return json(response, 201, { event, snapshot: await snapshot() });
+      }
+      // What a session will cost before anyone starts one.
+      if (request.method === "GET" && url.pathname === "/api/session/cost") {
+        return json(response, 200, sessionCost());
       }
       // The point of the product: the residents produce the project document
       // itself, revision by revision, rather than talking about it.
@@ -119,6 +195,8 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
         await mesh.publish(project.id, { type: "file.written", actorId: "user", payload: written });
         return json(response, 201, { file: written, snapshot: await snapshot() });
       }
+      // One turn of the conversation: record what the user said, then let the room
+      // answer with the chosen topology. A chat UI needs both halves atomically.
       if (request.method === "POST" && url.pathname === "/api/chat") {
         const input = await body(request);
         if (!input.text?.trim()) return json(response, 400, { error: "Message text is required" });

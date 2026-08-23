@@ -37,6 +37,12 @@ export class CognitiveClient {
     return this.#send("/api/collaborate", { objective, topology, residentIds });
   }
 
+  deliberate(question, residentIds, synthesisBy) { return this.#send("/api/deliberate", { question, residentIds, synthesisBy }); }
+  resolve(decision) { return this.#send("/api/deliberate/resolve", { decision }); }
+  assign(phases, residentIds, dividedBy) { return this.#send("/api/assign", { phases, residentIds, dividedBy }); }
+  confirmAssignment(assignments) { return this.#send("/api/assign/confirm", { assignments }); }
+  sessionCost() { return this.#request("/api/session/cost"); }
+
   files(path = ".") { return this.#request(`/api/files?path=${encodeURIComponent(path)}`); }
   attach(path) { return this.#send("/api/files/attach", { path }); }
   write(path, content, overwrite = false) { return this.#send("/api/files/write", { path, content, overwrite }); }

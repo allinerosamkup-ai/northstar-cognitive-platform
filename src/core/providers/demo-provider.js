@@ -21,7 +21,72 @@ export class DemoProvider {
 
   async work(request) {
     if (request.kind === "build") return { text: this.#document(request) };
+    if (request.kind === "propose") return { text: this.#propose(request) };
+    if (request.kind === "critique") return { text: this.#critique(request) };
+    if (request.kind === "synthesis") return { text: this.#synthesis(request) };
+    if (request.kind === "claim") return { text: this.#claim(request) };
+    if (request.kind === "divide") return { text: this.#divide(request) };
     return { text: `${this.perspective}: ${request.prompt}. This contribution remains grounded in project version ${request.projectVersion}.` };
+  }
+
+  #demoNote(what) {
+    return `_Demo response — no language model wrote this ${what}. Add an API key in Settings._`;
+  }
+
+  #propose({ question = "" }) {
+    return [
+      `Looking at "${trimToWords(String(question), 90)}" through ${this.perspective.toLowerCase()}:`,
+      "",
+      "I would commit to the option that keeps the project reversible. Decide what",
+      "\"done\" means first, then pick whichever choice is cheapest to undo if it is wrong.",
+      "",
+      this.#demoNote("proposal")
+    ].join("\n");
+  }
+
+  #critique({ others = [] }) {
+    const named = others.map(item => item.model ?? item.residentId).join(" and ");
+    return [
+      named ? `I read ${named}.` : "I read the other proposals.",
+      "",
+      "Where a real model would agree, disagree, or change its mind, this stand-in",
+      "cannot: it has no view to revise.",
+      "",
+      this.#demoNote("response")
+    ].join("\n");
+  }
+
+  #synthesis({ question = "" }) {
+    return [
+      "## Conclusion",
+      "",
+      `No conclusion can be drawn about "${trimToWords(String(question), 80)}" from demo responses.`,
+      "Add an API key in Settings and run the session again.",
+      "",
+      "## Agreed",
+      "",
+      "- none",
+      "",
+      "## Unresolved",
+      "",
+      "- none"
+    ].join("\n");
+  }
+
+  #claim({ phases = [] }) {
+    return [
+      `A stand-in cannot judge what it is good at, so it claims nothing.`,
+      phases.length ? `Parts on the table: ${phases.join(", ")}.` : "",
+      "",
+      this.#demoNote("claim")
+    ].filter(Boolean).join("\n");
+  }
+
+  #divide({ phases = [], residentIds = [] }) {
+    if (!phases.length || !residentIds.length) return this.#demoNote("division");
+    return phases
+      .map((phase, index) => `- ${phase}: ${residentIds[index % residentIds.length]} — round-robin stand-in, not a judgement`)
+      .join("\n");
   }
 
   #document({ instruction = "the project", document, attachments = [] }) {

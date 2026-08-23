@@ -10,5 +10,5 @@ test("Project Brain records one canonical ordered event stream", async () => {
   assert.equal(first.sequence, 1);
   assert.equal(second.sequence, 2);
   assert.deepEqual(await brain.eventsSince(project.id, 0), [first, second]);
-  assert.deepEqual(await brain.getState(project.id), { version: 2, latestMessage: "Define the market", decisions: ["English-first"], tasks: [], contributions: [], document: null });
+  assert.deepEqual(await brain.getState(project.id), { version: 2, latestMessage: "Define the market", decisions: ["English-first"], tasks: [], contributions: [], document: null, session: null, assignment: null });
 });

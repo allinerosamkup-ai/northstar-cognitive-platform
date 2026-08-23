@@ -15,6 +15,7 @@
       <nav aria-label="Project navigation">
         <button class="rail-item active" data-view="chat" title="Conversation">◫</button>
         <button class="rail-item" data-view="brain" title="Project brain">⌁</button>
+        <button class="rail-item" data-view="session" title="Working session">⚖</button>
         <button class="rail-item" data-view="document" title="Project document">⌸</button>
         <button class="rail-item" data-view="artifacts" title="Files">◇</button>
         <button class="rail-item" data-view="settings" title="Settings">···</button>
@@ -91,6 +92,39 @@
           <h3>Complete event log</h3>
           <p class="muted-note">Everything the project has recorded, including the bookkeeping events the conversation hides.</p>
           <div id="event-log" class="event-log"></div>
+        </div>
+      </section>
+
+      <!-- ============ SESSION ============ -->
+      <section class="view" data-view-panel="session" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">D</span><h2>Working session</h2></div>
+          <span class="muted" id="session-cost"></span>
+        </div>
+        <p class="muted-note">The residents answer, then read each other and respond, then one writes the conclusion. Nothing becomes a decision until you say so — this is the most expensive thing the app does, so the cost is shown before you start.</p>
+
+        <form id="meet-form" class="composer build-composer">
+          <label for="meet-question">Put a question to the room</label>
+          <div>
+            <textarea id="meet-question" rows="2" placeholder="e.g. Should we store data on the device or in the cloud? Enter to start."></textarea>
+            <button type="submit" id="meet">Meet</button>
+          </div>
+          <footer><span id="session-status"></span></footer>
+        </form>
+
+        <div id="session-body"></div>
+
+        <div class="brain-block">
+          <h3>Divide the work</h3>
+          <p class="muted-note">Each resident argues for the parts it is best placed to take, and one of them proposes the split. You approve it or change it.</p>
+          <form id="divide-form" class="composer build-composer">
+            <label for="divide-phases">The parts, separated by |</label>
+            <div>
+              <textarea id="divide-phases" rows="2" placeholder="Architecture | User research | Launch plan"></textarea>
+              <button type="submit" id="divide">Divide</button>
+            </div>
+          </form>
+          <div id="assignment-body"></div>
         </div>
       </section>
 

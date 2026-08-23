@@ -154,6 +154,100 @@ function renderBrain() {
     : '<div class="decision empty">No files attached yet.</div>';
 }
 
+/* ------------------------------------------------------------------ session */
+
+function renderSession() {
+  const open = snapshot.state.session;
+  const cost = snapshot.sessionCost;
+  $("#session-cost").textContent = cost
+    ? (cost.liveParticipants
+        ? `${cost.deliberationCalls} provider calls per session`
+        : "all residents on demo — a session costs nothing")
+    : "";
+
+  if (!open) {
+    $("#session-body").innerHTML = '<p class="empty-document">No open session. Ask the room something and they will work it through together.</p>';
+    return;
+  }
+
+  const voices = list => list.map(item => `
+    <article class="voice">
+      <div class="voice-who">${escapeHtml(item.model ?? item.residentId)}</div>
+      <div class="voice-body">${renderMarkdown(item.text)}</div>
+    </article>`).join("");
+
+  $("#session-body").innerHTML = `
+    <p class="session-question">${escapeHtml(open.question)}</p>
+
+    <div class="brain-block"><h3>What each one proposed</h3>${voices(open.proposals)}</div>
+    ${open.critiques.length ? `<div class="brain-block"><h3>How they answered each other</h3>${voices(open.critiques)}</div>` : ""}
+    ${open.unavailable.map(missing => `<p class="session-missing">${escapeHtml(missing.model ?? missing.residentId)} could not take part — ${escapeHtml(missing.error)}</p>`).join("")}
+
+    <div class="brain-block">
+      <h3>Conclusion${open.synthesisBy ? ` · written by ${escapeHtml(open.synthesisBy)}` : ""}</h3>
+      <div class="conclusion">${renderMarkdown(open.synthesis.conclusion || "(none)")}</div>
+      ${open.synthesis.agreed.length ? `<h4 class="mini-heading">Agreed</h4><ul class="plain-list">${open.synthesis.agreed.map(point => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}
+      ${open.synthesis.unresolved.length ? `
+        <h4 class="mini-heading unresolved-heading">Still unresolved — yours to settle</h4>
+        <ul class="plain-list">${open.synthesis.unresolved.map(point => `<li><b>${escapeHtml(point.topic)}</b>${point.detail ? ` — ${escapeHtml(point.detail)}` : ""}</li>`).join("")}</ul>` : ""}
+    </div>
+
+    <form id="resolve-form" class="composer build-composer">
+      <label for="resolve-decision">Nothing is decided until you say so</label>
+      <div>
+        <textarea id="resolve-decision" rows="2" placeholder="Leave empty to accept their conclusion, or write your own decision here."></textarea>
+        <button type="submit" id="resolve">Decide</button>
+      </div>
+    </form>`;
+}
+
+function renderAssignment() {
+  const proposal = snapshot.state.assignment;
+  if (!proposal) {
+    $("#assignment-body").innerHTML = "";
+    return;
+  }
+  const confirmed = proposal.status === "confirmed";
+  $("#assignment-body").innerHTML = `
+    <div class="assignment ${confirmed ? "confirmed" : ""}">
+      <div class="assignment-head">
+        <span class="badge ${confirmed ? "badge-live" : ""}">${confirmed ? "confirmed" : `proposed${proposal.dividedBy ? ` by ${escapeHtml(proposal.dividedBy)}` : ""}`}</span>
+      </div>
+      ${proposal.assignments.map(item => `
+        <div class="decision">
+          <b>${escapeHtml(item.phase)}</b> → ${escapeHtml(item.residentId)}
+          ${item.reason ? `<span class="muted">${escapeHtml(item.reason)}</span>` : ""}
+        </div>`).join("")}
+      ${proposal.unassigned?.length ? `<p class="session-missing">Nobody was given: ${escapeHtml(proposal.unassigned.join(", "))}</p>` : ""}
+      ${confirmed ? "" : `<button type="button" id="confirm-division">Approve this division</button>`}
+    </div>`;
+}
+
+function showSessionStatus(message, failed = false) {
+  const status = $("#session-status");
+  status.textContent = message;
+  status.classList.toggle("failed", failed);
+}
+
+async function runSession(field, run) {
+  if (busy) return;
+  const value = field.value.trim();
+  if (!value) return;
+  busy = true;
+  field.disabled = true;
+  showSessionStatus("The residents are working through it…");
+  try {
+    applySnapshot((await run(value)).snapshot);
+    field.value = "";
+    showSessionStatus("");
+  } catch (error) {
+    showSessionStatus(error.message, true);
+  } finally {
+    busy = false;
+    field.disabled = false;
+  }
+}
+
 /* ----------------------------------------------------------------- document */
 
 function renderDocument() {
@@ -336,6 +430,8 @@ function applySnapshot(value) {
   flagResidentsThatHeard(previous);
   renderBrain();
   renderDocument();
+  renderSession();
+  renderAssignment();
   renderSettings();
 }
 
@@ -537,6 +633,49 @@ $("#provider-settings").addEventListener("click", async event => {
     } catch (error) {
       providerResult(form, error.message, true);
     }
+  }
+});
+
+
+/* --------------------------------------------------------- session handlers */
+
+$("#meet-form").addEventListener("submit", event => {
+  event.preventDefault();
+  runSession($("#meet-question"), question => post("/api/deliberate", { question }));
+});
+$("#meet-question").addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); $("#meet-form").requestSubmit(); }
+});
+
+$("#divide-form").addEventListener("submit", event => {
+  event.preventDefault();
+  runSession($("#divide-phases"), value =>
+    post("/api/assign", { phases: value.split("|").map(part => part.trim()).filter(Boolean) }));
+});
+
+// The decision form and the approve button are rendered with the session, so
+// they are reached by delegation rather than bound once at load.
+$("#session-body").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (event.target.id !== "resolve-form") return;
+  const field = $("#resolve-decision");
+  if (busy) return;
+  busy = true;
+  try {
+    applySnapshot((await post("/api/deliberate/resolve", { decision: field.value.trim() || undefined })).snapshot);
+  } catch (error) {
+    showSessionStatus(error.message, true);
+  } finally {
+    busy = false;
+  }
+});
+
+$("#assignment-body").addEventListener("click", async event => {
+  if (!event.target.closest("#confirm-division")) return;
+  try {
+    applySnapshot((await post("/api/assign/confirm", {})).snapshot);
+  } catch (error) {
+    showSessionStatus(error.message, true);
   }
 });
 

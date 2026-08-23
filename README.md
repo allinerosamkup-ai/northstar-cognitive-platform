@@ -54,6 +54,7 @@ Everything the interface does, the CLI does too — the two share one project:
 ```sh
 npm run cli -- status
 npm run cli -- ask "What should we build first?"
+npm run cli -- meet "Local or cloud storage?"
 npm run cli -- build "Draft the launch plan"
 npm run cli -- save
 ```
@@ -75,6 +76,9 @@ Want real OpenAI/Anthropic/Gemini calls instead of canned text? See
 - Permission-ready execution boundary
 - Real OpenAI, Anthropic, and Gemini API adapters plus safe demo providers
 - Browse a local folder and attach a file into the shared project brain
+- Working sessions where the residents read and answer each other, then conclude
+- Divide the work: each resident argues for the parts it should take
+- Every conclusion is a proposal — the person running the project decides
 - A living project document the intelligences build and revise together
 - Writes real files to disk from what they build
 - API keys configured in the app, stored locally, testable before you spend
@@ -88,6 +92,9 @@ recorded in one appears in the other immediately.
 npm run cli -- help          # every command
 npm run cli -- status        # who is present, what they have heard
 npm run cli -- ask "..."     # ask the project; the residents answer
+npm run cli -- meet "..."    # a working session: propose, respond, conclude
+npm run cli -- conclude      # accept the conclusion, or write your own
+npm run cli -- divide "A|B"  # they argue for parts of the work
 npm run cli -- build "..."   # produce the next revision of the document
 npm run cli -- document      # print the current document
 npm run cli -- save          # write it to disk
@@ -108,6 +115,39 @@ npm test
 ```
 
 Node's built-in test runner (`node --test`), no test framework dependency.
+
+## Working sessions
+
+The residents do not only answer in parallel — they can hold a session:
+
+1. **Propose.** Each one answers the question in its own voice.
+2. **Respond.** Each one reads what the others said and answers them, and may
+   change its position.
+3. **Conclude.** One of them (a live model whenever there is one) reconciles
+   the positions, listing what was agreed and what was not.
+
+The conclusion is a **proposal**. Nothing becomes a decision until you accept
+it or write your own — disagreement is surfaced rather than averaged away.
+
+```sh
+npm run cli -- cost                       # what a session will spend, first
+npm run cli -- meet "Local or cloud?"     # the three rounds
+npm run cli -- conclude                   # accept their conclusion
+npm run cli -- conclude "your decision"   # or overrule it
+```
+
+Work can be divided the same way: each resident argues for the parts it is
+best placed to take, one of them proposes the split, and you approve or change
+it before it becomes the project's.
+
+```sh
+npm run cli -- divide "Architecture | Research | Launch"
+npm run cli -- confirm-division
+```
+
+A session is the most expensive thing the app does — two provider calls per
+participant plus one for the conclusion — so the cost is shown before you
+start one, in the interface and in the CLI.
 
 ## Building something
 

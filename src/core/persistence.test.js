@@ -18,7 +18,7 @@ test("Project Brain survives process restarts without losing context", async () 
     const project = await first.createProject({ name: "Northstar", purpose: "Create the future" });
     await first.appendEvent(project.id, { type: "decision.created", actorId: "user", payload: { statement: "Context belongs to the project" } });
     const restarted = new FileProjectBrain(path);
-    assert.deepEqual(await restarted.getState(project.id), { version: 1, latestMessage: null, decisions: ["Context belongs to the project"], tasks: [], contributions: [], document: null });
+    assert.deepEqual(await restarted.getState(project.id), { version: 1, latestMessage: null, decisions: ["Context belongs to the project"], tasks: [], contributions: [], document: null, session: null, assignment: null });
   });
 });
 

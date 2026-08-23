@@ -122,3 +122,32 @@
 .cloud.offline i{background:var(--coral);box-shadow:0 0 16px var(--coral);animation:blink 1.2s infinite}
 .cloud.offline span{color:var(--coral)}
 @keyframes blink{50%{opacity:.25}}
+
+/* ===== working session ===== */
+.session-question{font:500 21px var(--serif);line-height:1.25;letter-spacing:-.02em;border-left:3px solid var(--acid);padding-left:16px;margin:0 0 26px}
+.voice{border:1px solid var(--line);background:#f8f6ef;padding:15px 17px;margin-bottom:10px}
+.voice-who{font:600 9px var(--mono);text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin-bottom:8px}
+.voice-body p{font-size:13.5px;line-height:1.55;margin:0 0 9px}
+.voice-body p:last-child{margin-bottom:0}
+.voice-body ul{margin:0 0 9px;padding-left:19px}
+.voice-body li{font-size:13.5px;line-height:1.5}
+.voice-body em{color:var(--muted);font-size:12px}
+.conclusion{background:var(--ink);color:var(--paper);padding:19px 21px}
+.conclusion p{font-size:14.5px;line-height:1.6;margin:0 0 11px}
+.conclusion p:last-child{margin-bottom:0}
+.conclusion strong{color:var(--acid);font-weight:600}
+.mini-heading{font:700 9px var(--mono);text-transform:uppercase;letter-spacing:.1em;margin:20px 0 8px;color:var(--muted)}
+.unresolved-heading{color:var(--coral)}
+.plain-list{margin:0;padding-left:19px}
+.plain-list li{font-size:13px;line-height:1.55;margin-bottom:5px}
+.session-missing{font:10px var(--mono);color:var(--coral);line-height:1.5;margin:10px 0}
+#session-status.failed{color:var(--coral);text-transform:none;letter-spacing:0;font-size:10px}
+#session-cost{text-transform:none;letter-spacing:.04em}
+
+/* ===== division of work ===== */
+.assignment{border:1px solid var(--line);background:#f8f6ef;padding:17px;margin-top:14px}
+.assignment.confirmed{border-color:var(--ink);border-left-width:3px}
+.assignment-head{margin-bottom:12px}
+.assignment .decision{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:13px;border-left-color:var(--acid)}
+.assignment .decision .muted{font:10px var(--mono);flex-basis:100%}
+#confirm-division{margin-top:14px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);padding:9px 15px;font:700 9px var(--mono);text-transform:uppercase;letter-spacing:.09em;cursor:pointer}

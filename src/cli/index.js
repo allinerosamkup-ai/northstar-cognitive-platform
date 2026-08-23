@@ -14,6 +14,13 @@ CONVERSATION
   say <text>                      Record a message without asking anyone to answer
   decide <statement>              Record a canonical decision
 
+WORKING SESSIONS
+  meet <question>                 The residents answer, read each other, and conclude
+  conclude [decision]             Accept the conclusion, or write your own
+  divide <part> | <part> | ...    They argue for parts of the work and propose a split
+  confirm-division                Approve the proposed split
+  cost                            What a session costs in provider calls
+
 BUILDING
   build <instruction>             Produce the next revision of the project document
   document                        Print the current document
@@ -34,6 +41,7 @@ PROVIDERS
 OPTIONS
   --topology <name>               solo | distributed | joint | composite (default: composite)
   --with <ids>                    Comma-separated residents, e.g. --with gpt,claude
+  --by <id>                       Which resident writes the conclusion or the split
   --json                          Machine-readable output for scripts
 
   Set COGNITIVE_API_URL to reach a server on another port or host.
@@ -49,6 +57,7 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
+  else if (argument === "--by") options.synthesisBy = options.dividedBy = argv[++index];
   else positional.push(argument);
 }
 const [command = "status", ...rest] = positional;
@@ -103,6 +112,81 @@ const COMMANDS = {
   async decide() {
     const value = await client.decision(requireText(joined, "A statement"));
     out(options.json ? value : `Decision recorded as event #${value.event.sequence}`);
+  },
+
+  async meet() {
+    const question = requireText(joined, "A question");
+    const cost = await client.sessionCost();
+    if (!options.json && cost.liveParticipants > 0) {
+      console.log(`Running a session with ${cost.liveParticipants} live ${cost.liveParticipants === 1 ? "intelligence" : "intelligences"} \u00b7 about ${cost.deliberationCalls} provider calls\n`);
+    }
+    const { session } = await client.deliberate(question, options.with, options.synthesisBy);
+    if (options.json) return out(session);
+
+    console.log("PROPOSALS");
+    for (const item of session.proposals) console.log(`\n[${item.model ?? item.residentId}]\n${item.text}`);
+
+    if (session.critiques.length) {
+      console.log("\n\nRESPONSES TO EACH OTHER");
+      for (const item of session.critiques) console.log(`\n[${item.model ?? item.residentId}]\n${item.text}`);
+    }
+    for (const missing of session.unavailable) {
+      console.log(`\n[${missing.model ?? missing.residentId}] could not take part \u2014 ${missing.error}`);
+    }
+
+    console.log(`\n\nCONCLUSION${session.synthesisBy ? ` (written by ${session.synthesisBy})` : ""}\n`);
+    console.log(session.synthesis.conclusion || "(none)");
+    if (session.synthesis.agreed.length) {
+      console.log("\nAgreed:");
+      for (const point of session.synthesis.agreed) console.log(`  \u00b7 ${point}`);
+    }
+    if (session.synthesis.unresolved.length) {
+      console.log("\nStill unresolved \u2014 this is yours to settle:");
+      for (const point of session.synthesis.unresolved) console.log(`  \u00b7 ${point.topic}${point.detail ? `: ${point.detail}` : ""}`);
+    }
+    console.log(`\nNothing is decided yet. Accept it with "conclude", or write your own with "conclude <your decision>".`);
+  },
+
+  async conclude() {
+    const value = await client.resolve(joined || undefined);
+    out(options.json ? value : `Decided: ${value.snapshot.state.decisions.at(-1)}`);
+  },
+
+  async divide() {
+    const phases = joined.split("|").map(part => part.trim()).filter(Boolean);
+    if (phases.length < 2) {
+      throw new Error(`At least two parts are needed, separated by "|". Example: divide Architecture | Research | Launch`);
+    }
+    const { assignment } = await client.assign(phases, options.with, options.dividedBy);
+    if (options.json) return out(assignment);
+
+    console.log("WHAT EACH ONE ARGUED");
+    for (const claim of assignment.claims) console.log(`\n[${claim.model ?? claim.residentId}]\n${claim.text}`);
+
+    console.log(`\n\nPROPOSED DIVISION (by ${assignment.dividedBy})\n`);
+    for (const item of assignment.assignments) {
+      console.log(`  ${item.phase} -> ${item.residentId}${item.reason ? ` (${item.reason})` : ""}`);
+    }
+    if (assignment.unassigned.length) console.log(`\n  Nobody was given: ${assignment.unassigned.join(", ")}`);
+    console.log(`\nApprove it with "confirm-division", or run divide again.`);
+  },
+
+  async "confirm-division"() {
+    const value = await client.confirmAssignment();
+    if (options.json) return out(value);
+    for (const item of value.snapshot.state.assignment.assignments) {
+      console.log(`  ${item.phase} -> ${item.residentId}`);
+    }
+    console.log("\nDivision confirmed. Every resident can see it.");
+  },
+
+  async cost() {
+    const value = await client.sessionCost();
+    if (options.json) return out(value);
+    console.log(`Live intelligences: ${value.liveParticipants}`);
+    console.log(`  meet    ${value.deliberationCalls} provider calls`);
+    console.log(`  divide  ${value.assignmentCalls} provider calls`);
+    if (!value.liveParticipants) console.log(`\nAll demo \u2014 a session costs nothing right now.`);
   },
 
   async build() {

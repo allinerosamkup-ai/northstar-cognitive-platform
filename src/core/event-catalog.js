@@ -1,5 +1,7 @@
-const SURFACE_EVENTS = new Set(["message.created", "decision.created", "task.created", "contribution.created", "file.attached", "document.revised"]);
-const LOG_ONLY_EVENTS = new Set(["collective.started", "resident.paused", "file.written", "settings.changed"]);
+const SURFACE_EVENTS = new Set(["message.created", "decision.created", "task.created", "contribution.created", "file.attached", "document.revised", "session.concluded", "assignment.confirmed"]);
+// A proposal is not yet what the project believes, so it stays out of what the
+// residents read back — only a confirmed assignment becomes shared truth.
+const LOG_ONLY_EVENTS = new Set(["collective.started", "resident.paused", "file.written", "settings.changed", "session.started", "assignment.proposed"]);
 
 export const SURFACE_EVENT_TYPES = [...SURFACE_EVENTS];
 

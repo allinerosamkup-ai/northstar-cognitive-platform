@@ -296,3 +296,122 @@ test("A demo build on top of an existing document keeps building on it", async (
     assert.match(revision.markdown, /Carried over/);
   });
 });
+
+test("A deliberation runs its rounds and comes back as a proposal, not a decision", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/deliberate`, { question: "Local or cloud storage?" });
+    assert.equal(response.status, 201);
+    const { session, snapshot } = await response.json();
+
+    assert.equal(session.proposals.length, 3, "everyone proposes");
+    assert.equal(session.critiques.length, 3, "and everyone answers the others");
+    assert.equal(session.status, "proposed");
+    assert.ok(session.synthesisBy, "someone wrote the conclusion");
+    assert.deepEqual(snapshot.state.decisions, [],
+      "a session must never decide anything on its own");
+    assert.equal(snapshot.state.session.question, "Local or cloud storage?");
+  });
+});
+
+test("A deliberation with one resident skips the round of answering itself", async () => {
+  await serving(async base => {
+    const { session } = await postJson(`${base}/api/deliberate`, { question: "q", residentIds: ["gpt"] })
+      .then(response => response.json());
+    assert.equal(session.proposals.length, 1);
+    assert.deepEqual(session.critiques, [], "there is nobody to respond to");
+  });
+});
+
+test("Accepting the conclusion turns it into the project's decision", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/deliberate`, { question: "Local or cloud?" });
+    const { snapshot } = await postJson(`${base}/api/deliberate/resolve`, {}).then(response => response.json());
+
+    assert.equal(snapshot.state.decisions.length, 1);
+    assert.equal(snapshot.state.session, null, "the session closes once it is settled");
+  });
+});
+
+// The point of the design: the residents advise, the person rules.
+test("A person can overrule the conclusion and record their own decision", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/deliberate`, { question: "Subscription or one-off?" });
+    const { snapshot } = await postJson(`${base}/api/deliberate/resolve`, { decision: "One-off. No recurring billing." })
+      .then(response => response.json());
+
+    assert.deepEqual(snapshot.state.decisions, ["One-off. No recurring billing."]);
+    const recorded = snapshot.events.find(event => event.type === "decision.created");
+    assert.equal(recorded.payload.question, "Subscription or one-off?", "the decision remembers what it settled");
+  });
+});
+
+test("Resolving with no open session is refused", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/deliberate/resolve`, { decision: "x" })).status, 400);
+  });
+});
+
+test("An empty deliberation question is refused", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/deliberate`, { question: "  " })).status, 400);
+  });
+});
+
+test("The residents argue for parts of the work and a split is proposed", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/assign`, { phases: ["Architecture", "Research", "Launch"] });
+    assert.equal(response.status, 201);
+    const { assignment, snapshot } = await response.json();
+
+    assert.equal(assignment.claims.length, 3, "each resident makes its case");
+    assert.equal(assignment.status, "proposed");
+    assert.equal(snapshot.state.assignment.status, "proposed",
+      "a proposed split is not yet what the project believes");
+  });
+});
+
+test("Dividing fewer than two parts is refused", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/assign`, { phases: ["Only one"] })).status, 400);
+  });
+});
+
+test("Confirming a division is what makes it the project's", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/assign`, { phases: ["Architecture", "Research"] });
+    const { snapshot } = await postJson(`${base}/api/assign/confirm`, {}).then(response => response.json());
+    assert.equal(snapshot.state.assignment.status, "confirmed");
+    assert.ok(snapshot.state.assignment.assignments.length > 0);
+  });
+});
+
+test("A person can edit the split before confirming it", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/assign`, { phases: ["Architecture", "Research"] });
+    const { snapshot } = await postJson(`${base}/api/assign/confirm`, {
+      assignments: [{ phase: "Architecture", residentId: "claude" }, { phase: "Research", residentId: "gemini" }]
+    }).then(response => response.json());
+
+    assert.deepEqual(snapshot.state.assignment.assignments.map(item => item.residentId), ["claude", "gemini"]);
+  });
+});
+
+test("A division naming an unknown resident is refused", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/assign`, { phases: ["Architecture", "Research"] });
+    const response = await postJson(`${base}/api/assign/confirm`, {
+      assignments: [{ phase: "Architecture", residentId: "llama" }]
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /No such resident: llama/);
+  });
+});
+
+// Cost is visible before anyone spends it.
+test("The cost of a session is reported before running one", async () => {
+  await serving(async base => {
+    const cost = await fetch(`${base}/api/session/cost`).then(response => response.json());
+    assert.equal(cost.liveParticipants, 0, "nothing is live in a hermetic test");
+    assert.equal(cost.deliberationCalls, 1);
+  });
+});

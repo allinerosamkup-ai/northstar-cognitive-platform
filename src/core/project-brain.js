@@ -23,13 +23,17 @@ export class InMemoryProjectBrain {
   }
   async getState(projectId) {
     const events = this.#entry(projectId).events;
-    const state = { version: events.length, latestMessage: null, decisions: [], tasks: [], contributions: [], document: null };
+    const state = { version: events.length, latestMessage: null, decisions: [], tasks: [], contributions: [], document: null, session: null, assignment: null };
     for (const event of events) {
       if (event.type === "message.created") state.latestMessage = event.payload.text;
       if (event.type === "decision.created") state.decisions.push(event.payload.statement);
       if (event.type === "task.created") state.tasks.push(event.payload);
       if (event.type === "contribution.created") state.contributions.push(event.payload);
       if (event.type === "document.revised") state.document = event.payload;
+      if (event.type === "session.concluded") state.session = { ...event.payload, sequence: event.sequence };
+      if (event.type === "session.resolved") state.session = null;
+      if (event.type === "assignment.proposed") state.assignment = { ...event.payload, sequence: event.sequence };
+      if (event.type === "assignment.confirmed") state.assignment = { ...event.payload, sequence: event.sequence };
     }
     return state;
   }
