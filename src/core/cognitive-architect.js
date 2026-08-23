@@ -2,7 +2,12 @@ export class CognitiveArchitect {
   constructor(mesh, brain) { this.mesh = mesh; this.brain = brain; }
   async run(projectId, request) {
     const selected = request.residentIds.map(id => this.mesh.resident(projectId, id)).filter(Boolean);
-    if (!selected.length) throw new Error("No resident LLM selected");
+    if (!selected.length) {
+      const available = this.mesh.residents(projectId).map(resident => resident.id);
+      throw new Error(available.length
+        ? `No such resident. This project has: ${available.join(", ")}`
+        : "This project has no resident intelligences");
+    }
     await this.mesh.publish(projectId, { type: "collective.started", actorId: "cognitive-architect", payload: { objective: request.objective, topology: request.topology, residentIds: request.residentIds } });
 
     const contributors = request.topology === "solo" ? selected.slice(0, 1) : selected;

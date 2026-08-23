@@ -138,7 +138,7 @@ const COMMANDS = {
   async ls() {
     const listing = await client.files(joined || ".");
     if (options.json) return out(listing);
-    console.log(listing.path === "." ? "workspace" : `workspace/${listing.path}`);
+    console.log(listing.path && listing.path !== "." ? `workspace/${listing.path}` : "workspace");
     if (!listing.items.length) console.log("  (empty)");
     for (const item of listing.items) {
       console.log(`  ${item.directory ? "/" : " "} ${item.name}${item.directory ? "" : `  ${item.size} bytes`}`);
