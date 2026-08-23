@@ -1,0 +1,11 @@
+data/
+.env
+.env.*
+!.env.example
+.pnpm-store/
+.npm-cache/
+node_modules/
+*.log
+
+# Documents the intelligences build and you chose to save
+documents/

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400" role="img" aria-labelledby="t d">
+  <title id="t">One append-only project log, three resident intelligences</title>
+  <desc id="d">GPT, Claude and Gemini each hold a cursor into a shared append-only event log. A resident whose cursor is behind the log head is refused when it tries to contribute.</desc>
+  <style>
+    .bg  { fill: #f1efe7 }
+    .ink { fill: #11120f }
+    .box { fill: #f8f6ef; stroke: #11120f; stroke-width: 1.5 }
+    .dark{ fill: #11120f }
+    .line{ stroke: #11120f; stroke-width: 1.5; fill: none }
+    .dash{ stroke: #11120f; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; opacity: .55 }
+    .lbl { font: 600 11px ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: .1em; text-transform: uppercase; fill: #6f716a }
+    .nm  { font: 600 15px ui-serif, Georgia, "Palatino Linotype", serif; fill: #11120f }
+    .sm  { font: 10px ui-monospace, "Cascadia Mono", Consolas, monospace; fill: #6f716a }
+    .on  { font: 600 10px ui-monospace, "Cascadia Mono", Consolas, monospace; fill: #11120f }
+    .no  { font: 600 10px ui-monospace, "Cascadia Mono", Consolas, monospace; fill: #ff6b4a }
+    .ttl { font: 500 19px ui-serif, Georgia, "Palatino Linotype", serif; fill: #11120f }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #16171a } .ink,.nm,.ttl,.on { fill: #f1efe7 }
+      .box { fill: #1e1f23; stroke: #6f716a } .dark { fill: #f1efe7 }
+      .line,.dash { stroke: #8d8f87 } .lbl,.sm { fill: #a3a59d }
+    }
+  </style>
+
+  <rect class="bg" width="880" height="400"/>
+  <text class="ttl" x="40" y="46">One project log. Three intelligences. Nobody writes over what they did not read.</text>
+
+  <!-- residents -->
+  <text class="lbl" x="40" y="92">Resident intelligences</text>
+  <g>
+    <rect class="box" x="40" y="106" width="196" height="58" rx="3"/>
+    <circle cx="70" cy="135" r="13" fill="#d9ff43" stroke="#11120f" stroke-width="1.5"/>
+    <text class="nm" x="94" y="131">GPT</text>
+    <text class="sm" x="94" y="148">cursor #7 · current</text>
+    <text class="on" x="205" y="140" text-anchor="end">✓</text>
+  </g>
+  <g>
+    <rect class="box" x="40" y="176" width="196" height="58" rx="3"/>
+    <circle cx="70" cy="205" r="13" fill="#ff6b4a" stroke="#11120f" stroke-width="1.5"/>
+    <text class="nm" x="94" y="201">Claude</text>
+    <text class="sm" x="94" y="218">cursor #7 · current</text>
+    <text class="on" x="205" y="210" text-anchor="end">✓</text>
+  </g>
+  <g>
+    <rect class="box" x="40" y="246" width="196" height="58" rx="3"/>
+    <circle cx="70" cy="275" r="13" fill="#6a8cff" stroke="#11120f" stroke-width="1.5"/>
+    <text class="nm" x="94" y="271">Gemini</text>
+    <text class="sm" x="94" y="288">cursor #5 · behind</text>
+    <text class="no" x="205" y="280" text-anchor="end">stale</text>
+  </g>
+
+  <!-- arrows into the log -->
+  <path class="line" d="M236 135 H300 l0 40 h24"/>
+  <path class="line" d="M236 205 H324"/>
+  <path class="dash" d="M236 275 H300 l0 -60 h24"/>
+  <text class="no" x="252" y="266">refused</text>
+
+  <!-- the log -->
+  <text class="lbl" x="352" y="92">Append-only project log</text>
+  <rect class="box" x="352" y="106" width="488" height="198" rx="3"/>
+
+  <g transform="translate(376,132)">
+    <rect class="dark" x="0" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="4" y="17" fill="#d9ff43">#1</text>
+    <rect class="dark" x="34" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="38" y="17" fill="#d9ff43">#2</text>
+    <rect class="dark" x="68" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="72" y="17" fill="#d9ff43">#3</text>
+    <rect class="dark" x="102" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="106" y="17" fill="#d9ff43">#4</text>
+    <rect class="dark" x="136" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="140" y="17" fill="#d9ff43">#5</text>
+    <rect class="dark" x="170" y="0" width="26" height="26" rx="2"/>
+    <text class="sm" x="174" y="17" fill="#d9ff43">#6</text>
+    <rect x="204" y="0" width="26" height="26" rx="2" fill="#d9ff43" stroke="#11120f" stroke-width="1.5"/>
+    <text class="sm" x="208" y="17" fill="#11120f">#7</text>
+    <text class="sm" x="246" y="17">head</text>
+  </g>
+
+  <text class="sm" x="376" y="192">message.created · decision.created · contribution.created · file.attached</text>
+  <text class="sm" x="376" y="210">document.revised · every event kept, none rewritten</text>
+
+  <line class="line" x1="376" y1="228" x2="816" y2="228" opacity=".35"/>
+  <text class="lbl" x="376" y="252">Materialised state</text>
+  <text class="sm" x="376" y="272">version 7 · the living document · decisions · attached files</text>
+  <text class="sm" x="376" y="290">rebuilt from the log, never stored as the source of truth</text>
+
+  <text class="sm" x="40" y="344">A resident behind the head is refused, not merged. It catches up by replaying the log — no re-explaining, no lost work.</text>
+  <text class="sm" x="40" y="364">Restart the server and every resident is replayed back to where it was. Swap a provider and it arrives already knowing the project.</text>
+</svg>

@@ -1,0 +1,298 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createPlatformServer } from "./server.js";
+
+async function serving(run) {
+  const directory = await mkdtemp(join(tmpdir(), "cognitive-api-"));
+  const workspacePath = join(directory, "workspace");
+  await mkdir(join(workspacePath, "notes"), { recursive: true });
+  await writeFile(join(workspacePath, "notes", "brief.md"), "# The brief\n\nShip it in English first.", "utf8");
+  await writeFile(join(directory, "outside-secret.txt"), "must never be readable", "utf8");
+
+  // Hermetic: an API key in the developer's shell must never turn a resident
+  // live mid-test and start making real network calls.
+  const app = await createPlatformServer({
+    dataPath: join(directory, "brain.jsonl"), port: 0, workspacePath,
+    envPath: join(directory, ".env"), processEnv: {}
+  });
+  await app.start();
+  try {
+    await run(`http://127.0.0.1:${app.port}`, { app, directory, workspacePath });
+  } finally {
+    await app.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+const postJson = (url, data) => fetch(url, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(data)
+});
+
+test("API, mesh, and project brain expose one shared project state", async () => {
+  await serving(async base => {
+    const interfaceHtml = await fetch(base).then(response => response.text());
+    assert.match(interfaceHtml, /Resident intelligences/);
+    assert.match(interfaceHtml, /data-view="artifacts"/);
+
+    const initial = await fetch(`${base}/api/snapshot`).then(response => response.json());
+    assert.equal(initial.residents.length, 3);
+    assert.ok(initial.residents.every(resident => resident.cursor === initial.state.version));
+
+    const message = await postJson(`${base}/api/messages`, { text: "Keep every intelligence aware of this decision." });
+    assert.equal(message.status, 201);
+    const updated = await fetch(`${base}/api/snapshot`).then(response => response.json());
+    assert.equal(updated.state.latestMessage, "Keep every intelligence aware of this decision.");
+    assert.ok(updated.residents.every(resident => resident.cursor === updated.state.version));
+
+    const collective = await postJson(`${base}/api/collaborate`, {
+      topology: "composite", objective: "Create a launch thesis", residentIds: ["gpt", "claude", "gemini"]
+    }).then(response => response.json());
+    assert.equal(collective.contributions.length, 3);
+    assert.match(collective.synthesis, /launch thesis/i);
+  });
+});
+
+test("The snapshot reports the environment the Settings view shows", async () => {
+  await serving(async (base, { workspacePath }) => {
+    const snapshot = await fetch(`${base}/api/snapshot`).then(response => response.json());
+    assert.equal(snapshot.environment.workspacePath, workspacePath);
+    assert.ok(snapshot.residents.every(resident => resident.live === false), "demo mode by default");
+    assert.ok(snapshot.settings.providers.every(provider => provider.configured === false));
+    assert.equal(snapshot.settings.liveResidency, false, "live residency must never default on");
+  });
+});
+
+test("One chat turn records the question and answers it", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/chat`, { text: "What should we build first?", topology: "composite" });
+    assert.equal(response.status, 201);
+    const { result, snapshot } = await response.json();
+
+    assert.equal(result.contributions.length, 3);
+    assert.match(result.synthesis, /What should we build first\?/);
+    assert.equal(snapshot.state.latestMessage, "What should we build first?");
+    assert.ok(snapshot.residents.every(resident => resident.cursor === snapshot.state.version),
+      "every resident heard the whole turn");
+  });
+});
+
+test("A solo chat turn is answered by one intelligence", async () => {
+  await serving(async base => {
+    const { result } = await postJson(`${base}/api/chat`, { text: "Answer alone", topology: "solo" })
+      .then(response => response.json());
+    assert.equal(result.contributions.length, 1);
+  });
+});
+
+test("An empty chat message is refused", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/chat`, { text: "   " });
+    assert.equal(response.status, 400);
+  });
+});
+
+test("Work routed through continuity produces a traceable contribution", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/work`, { objective: "Draft the opening section" });
+    assert.equal(response.status, 201);
+    const { result, snapshot } = await response.json();
+    assert.equal(result.takeover, false, "no provider failed, so nobody had to take over");
+    assert.ok(result.residentId, "the contribution names which intelligence produced it");
+    const recorded = snapshot.state.contributions.at(-1);
+    assert.match(recorded.text, /Draft the opening section/);
+    assert.equal(recorded.takeover, false);
+  });
+});
+
+test("Browsing the workspace lists folders and files", async () => {
+  await serving(async base => {
+    const root = await fetch(`${base}/api/files`).then(response => response.json());
+    assert.deepEqual(root.items.map(item => item.name), ["notes"]);
+
+    const notes = await fetch(`${base}/api/files?path=notes`).then(response => response.json());
+    assert.deepEqual(notes.items.map(item => item.path), ["notes/brief.md"]);
+    assert.equal(notes.items[0].directory, false);
+  });
+});
+
+test("Attaching a file puts its content into the shared project brain", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/files/attach`, { path: "notes/brief.md" });
+    assert.equal(response.status, 201);
+    const { event, file, snapshot } = await response.json();
+
+    assert.equal(event.type, "file.attached");
+    assert.equal(file.path, "notes/brief.md");
+    assert.match(event.payload.content, /Ship it in English first\./);
+    assert.ok(snapshot.residents.every(resident => resident.cursor === snapshot.state.version),
+      "every resident saw the attachment");
+  });
+});
+
+test("The workspace refuses to serve anything outside its root", async () => {
+  await serving(async base => {
+    for (const attempt of ["../outside-secret.txt", "notes/../../outside-secret.txt"]) {
+      const listing = await fetch(`${base}/api/files?path=${encodeURIComponent(attempt)}`);
+      assert.equal(listing.status, 403, `listing ${attempt}`);
+
+      const attach = await postJson(`${base}/api/files/attach`, { path: attempt });
+      assert.equal(attach.status, 403, `attaching ${attempt}`);
+      const body = await attach.json();
+      assert.doesNotMatch(JSON.stringify(body), /must never be readable/, "content must never leak");
+    }
+  });
+});
+
+test("Attaching a file that does not exist reports it clearly", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/files/attach`, { path: "notes/nope.md" });
+    assert.equal(response.status, 404);
+    assert.match((await response.json()).error, /No such file/);
+  });
+});
+
+test("Settings never expose a stored API key", async () => {
+  await serving(async base => {
+    const secret = "sk-test-SUPERSECRETVALUE-9999";
+    await postJson(`${base}/api/settings/providers`, { provider: "claude", apiKey: secret, model: "claude-opus-5" });
+
+    for (const url of [`${base}/api/settings`, `${base}/api/snapshot`]) {
+      const raw = await fetch(url).then(response => response.text());
+      assert.doesNotMatch(raw, /SUPERSECRETVALUE/, `${url} must never carry the key`);
+    }
+
+    const described = await fetch(`${base}/api/settings`).then(response => response.json());
+    const claude = described.providers.find(provider => provider.id === "claude");
+    assert.equal(claude.configured, true);
+    assert.equal(claude.model, "claude-opus-5");
+    assert.match(claude.keyHint, /^sk-…9999$/, "only a recognisable hint is shown");
+  });
+});
+
+test("Saving a key puts that resident on its real provider and persists to .env", async () => {
+  await serving(async (base, { directory }) => {
+    const { snapshot } = await postJson(`${base}/api/settings/providers`, { provider: "gpt", apiKey: "sk-live", model: "gpt-4o" })
+      .then(response => response.json());
+
+    const gpt = snapshot.residents.find(resident => resident.id === "gpt");
+    assert.equal(gpt.live, true, "the resident switched to its real provider");
+    assert.equal(gpt.model, "gpt-4o");
+    assert.ok(snapshot.residents.filter(resident => resident.id !== "gpt").every(resident => resident.live === false));
+
+    const envText = await readFile(join(directory, "workspace", "..", ".env"), "utf8").catch(() => "");
+    assert.match(envText, /OPENAI_API_KEY=sk-live/, "the key is written to .env so it survives a restart");
+  });
+});
+
+test("Removing a key returns that resident to demo mode", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/settings/providers`, { provider: "gemini", apiKey: "key" });
+    const removal = await fetch(`${base}/api/settings/providers`, {
+      method: "DELETE", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "gemini" })
+    }).then(response => response.json());
+
+    assert.equal(removal.settings.providers.find(provider => provider.id === "gemini").configured, false);
+    assert.equal(removal.snapshot.residents.find(resident => resident.id === "gemini").live, false);
+  });
+});
+
+test("Testing a provider with no key reports that instead of pretending", async () => {
+  await serving(async base => {
+    const result = await postJson(`${base}/api/settings/test`, { provider: "claude" }).then(response => response.json());
+    assert.equal(result.ok, false);
+    assert.match(result.error, /No API key/);
+  });
+});
+
+test("A build produces a document revision that lands in the project state", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/build`, { instruction: "Draft the launch plan" });
+    assert.equal(response.status, 201);
+    const { revision, snapshot } = await response.json();
+
+    assert.equal(revision.version, 1);
+    assert.ok(revision.markdown.length > 0, "a build must produce something");
+    assert.deepEqual(revision.contributors, ["gpt", "claude", "gemini"]);
+    assert.equal(snapshot.state.document.version, 1, "the document is part of the shared brain");
+  });
+});
+
+test("Building again revises the same document rather than starting over", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/build`, { instruction: "Draft the launch plan" });
+    const { revision } = await postJson(`${base}/api/build`, { instruction: "Add a risks section" })
+      .then(response => response.json());
+    assert.equal(revision.version, 2);
+  });
+});
+
+test("An empty build instruction is refused", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/build`, { instruction: "  " })).status, 400);
+  });
+});
+
+test("Writing a file puts it on disk and records it in the project", async () => {
+  await serving(async (base, { workspacePath }) => {
+    const response = await postJson(`${base}/api/files/write`, { path: "build/plan.md", content: "# The plan\n" });
+    assert.equal(response.status, 201);
+
+    const onDisk = await readFile(join(workspacePath, "build", "plan.md"), "utf8");
+    assert.equal(onDisk, "# The plan\n", "the file really exists outside the app");
+
+    const { snapshot } = await response.json();
+    assert.ok(snapshot.events.some(event => event.type === "file.written"));
+  });
+});
+
+test("Writing over an existing file asks first", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/files/write`, { path: "notes/plan.md", content: "original" });
+    const conflict = await postJson(`${base}/api/files/write`, { path: "notes/plan.md", content: "replacement" });
+    assert.equal(conflict.status, 409, "silent overwrite would destroy someone's work");
+
+    const forced = await postJson(`${base}/api/files/write`, { path: "notes/plan.md", content: "replacement", overwrite: true });
+    assert.equal(forced.status, 201);
+  });
+});
+
+test("Writing outside the workspace is refused over HTTP too", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/files/write`, { path: "../escaped.txt", content: "nope" });
+    assert.equal(response.status, 403);
+  });
+});
+
+// The demo path is the one every first-time visitor takes. If a build there
+// returns the engineered prompt instead of a document, the product looks broken
+// to exactly the audience it is trying to win.
+test("A build in demo mode produces a readable document, not the internal prompt", async () => {
+  await serving(async base => {
+    const { revision } = await postJson(`${base}/api/build`, { instruction: "Plan a shopping list app" })
+      .then(response => response.json());
+
+    assert.doesNotMatch(revision.markdown, /You are a resident intelligence/,
+      "the engineered prompt must never surface as the document");
+    assert.doesNotMatch(revision.markdown, /INSTRUCTION\n/,
+      "nor its section markers");
+    assert.match(revision.markdown, /^# /, "it is a real markdown document");
+    assert.match(revision.markdown, /demo output/i, "and it says plainly that no model wrote it");
+    assert.match(revision.markdown, /Plan a shopping list app/, "while reflecting what was asked");
+  });
+});
+
+test("A demo build on top of an existing document keeps building on it", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/build`, { instruction: "Plan a shopping list app" });
+    const { revision } = await postJson(`${base}/api/build`, { instruction: "Add offline support" })
+      .then(response => response.json());
+    assert.equal(revision.version, 2);
+    assert.match(revision.markdown, /Carried over/);
+  });
+});

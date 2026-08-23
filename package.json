@@ -1,0 +1,31 @@
+{
+  "name": "cognitive-project-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A model-independent cognitive project platform where GPT, Claude, and Gemini cohabit one canonical, append-only project brain instead of isolated chat contexts.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/allinerosamkup-ai/northstar-cognitive-platform.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "agents",
+    "multi-agent",
+    "llm",
+    "openai",
+    "anthropic",
+    "gemini",
+    "event-sourcing"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test \"src/**/*.test.js\"",
+    "cli": "node src/cli/index.js"
+  }
+}

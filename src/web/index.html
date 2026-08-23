@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#121310">
+  <title>Northstar — Cognitive Project</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="shell">
+    <aside class="rail">
+      <a class="mark" href="/" aria-label="Northstar home"><span>NS</span></a>
+      <nav aria-label="Project navigation">
+        <button class="rail-item active" data-view="chat" title="Conversation">◫</button>
+        <button class="rail-item" data-view="brain" title="Project brain">⌁</button>
+        <button class="rail-item" data-view="document" title="Project document">⌸</button>
+        <button class="rail-item" data-view="artifacts" title="Files">◇</button>
+        <button class="rail-item" data-view="settings" title="Settings">···</button>
+      </nav>
+      <div class="cloud" title="Cognitive environment"><i></i><span>LIVE</span></div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">COGNITIVE PROJECT / <span id="project-version">V0</span></p>
+          <h1 id="project-name">Northstar</h1>
+        </div>
+        <div class="top-actions">
+          <span class="continuity"><b></b> Continuity protected</span>
+          <button class="icon-button" id="open-settings" aria-label="Project options">•••</button>
+        </div>
+      </header>
+
+      <!-- ============ CHAT ============ -->
+      <section class="view" data-view-panel="chat">
+        <section class="residents-section">
+          <div class="section-heading">
+            <div><span class="section-number">A</span><h2>Resident intelligences</h2></div>
+            <span class="muted">One shared context</span>
+          </div>
+          <div id="residents" class="residents" aria-live="polite"></div>
+        </section>
+
+        <section class="room">
+          <div class="section-heading room-heading">
+            <div><span class="section-number">B</span><h2>Conversation</h2></div>
+            <div class="topologies" role="group" aria-label="Who answers">
+              <button data-topology="solo"><b>One AI</b><small>solo</small></button>
+              <button data-topology="distributed"><b>Split up</b><small>distributed</small></button>
+              <button data-topology="joint"><b>In turn</b><small>joint</small></button>
+              <button data-topology="composite" class="selected"><b>All together</b><small>composite</small></button>
+            </div>
+          </div>
+
+          <div id="timeline" class="timeline" aria-live="polite"></div>
+
+          <form id="message-form" class="composer">
+            <label for="message">Ask the project — every intelligence stays aware</label>
+            <div>
+              <textarea id="message" rows="2" placeholder="Ask anything. Press Enter to send, Shift+Enter for a new line." required></textarea>
+              <button type="submit" id="send" aria-label="Send">↗</button>
+            </div>
+            <footer>
+              <span id="composer-hint">Drop a file here to add it to the project</span>
+              <span id="attached-note" class="attached-note" hidden></span>
+            </footer>
+          </form>
+        </section>
+      </section>
+
+      <!-- ============ BRAIN ============ -->
+      <section class="view" data-view-panel="brain" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">C</span><h2>Project brain</h2></div>
+          <span class="pulse-dot">SYNCED</span>
+        </div>
+        <p id="project-purpose" class="purpose"></p>
+        <dl class="brain-stats">
+          <div><dt>Events retained</dt><dd id="event-count">0</dd></div>
+          <div><dt>Active decisions</dt><dd id="decision-count">0</dd></div>
+          <div><dt>Files attached</dt><dd id="file-count">0</dd></div>
+        </dl>
+        <div class="brain-block">
+          <h3>Canonical decisions</h3>
+          <div id="decisions" class="decision-list"></div>
+        </div>
+        <div class="brain-block">
+          <h3>Complete event log</h3>
+          <p class="muted-note">Everything the project has recorded, including the bookkeeping events the conversation hides.</p>
+          <div id="event-log" class="event-log"></div>
+        </div>
+      </section>
+
+      <!-- ============ DOCUMENT ============ -->
+      <section class="view" data-view-panel="document" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">D</span><h2 id="document-title">Project document</h2></div>
+          <span class="muted" id="document-version">No revisions yet</span>
+        </div>
+        <p class="muted-note">This is what the intelligences build together. Each instruction produces a new revision of the whole document, and every revision stays in the project brain.</p>
+
+        <form id="build-form" class="composer build-composer">
+          <label for="build-instruction">Tell the project what to build or change</label>
+          <div>
+            <textarea id="build-instruction" rows="2" placeholder="e.g. Draft the launch plan, then add a risks section. Enter to build."></textarea>
+            <button type="submit" id="build" aria-label="Build">Build</button>
+          </div>
+          <footer>
+            <span id="document-contributors"></span>
+            <button type="button" id="save-document" hidden>Save to disk</button>
+          </footer>
+        </form>
+
+        <div id="document-body" class="document-body"></div>
+
+        <div class="brain-block" id="proposed-files-block" hidden>
+          <h3>Files this revision proposes</h3>
+          <div id="proposed-files" class="decision-list"></div>
+        </div>
+
+        <div class="brain-block">
+          <h3>Revision history</h3>
+          <div id="revision-history" class="decision-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ ARTIFACTS ============ -->
+      <section class="view" data-view-panel="artifacts" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">D</span><h2>Files</h2></div>
+          <span class="muted" id="workspace-root"></span>
+        </div>
+        <p class="muted-note">Pick a file and its content joins the project brain, so every resident intelligence can see it.</p>
+        <nav id="breadcrumb" class="breadcrumb" aria-label="Folder path"></nav>
+        <div id="file-list" class="file-list"></div>
+        <div class="brain-block">
+          <h3>Attached to this project</h3>
+          <div id="attached-list" class="decision-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="view" data-view-panel="settings" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">F</span><h2>Settings</h2></div>
+          <span class="muted">Runs on your machine</span>
+        </div>
+        <p class="muted-note">Add an API key to replace a demo resident with the real intelligence. Keys are written to your local <code>.env</code> file, never leave this machine, and are never shown back to you or sent anywhere except the provider you configured.</p>
+
+        <div id="provider-settings" class="provider-settings"></div>
+
+        <div class="brain-block">
+          <h3>Environment</h3>
+          <dl id="settings-environment" class="settings-list"></dl>
+        </div>
+      </section>
+
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
