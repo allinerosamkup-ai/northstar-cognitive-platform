@@ -21,6 +21,13 @@ WORKING SESSIONS
   confirm-division                Approve the proposed split
   cost                            What a session costs in provider calls
 
+REPOSITORY
+  git                             Branch, what changed, recent commits
+  branch <what you are doing>     Start work on its own branch
+  diff                            What changed, ready to review
+  commit <message>                Record the work
+  discard [files]                 Throw the changes away
+
 RUNNING
   run <command>                   Run a command in the workspace
   fix -- <command>                Run it; while it fails, the files it blames are rewritten
@@ -70,6 +77,9 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
+  else if (argument === "--name") options.name = argv[++index];
+  else if (argument === "--staged") options.staged = true;
+  else if (argument === "--yes") options.yes = true;
   else if (argument === "--attempts") options.attempts = Number(argv[++index]);
   else if (argument === "--by") options.by = options.synthesisBy = options.dividedBy = argv[++index];
   else positional.push(argument);
@@ -209,6 +219,56 @@ const COMMANDS = {
     console.log(`\n${value.revision.markdown}\n`);
     console.log(`Revision ${value.revision.version} · built by ${value.revision.contributors.join(", ")}`);
     if (value.files.length) console.log(`Proposed files: ${value.files.map(file => file.path).join(", ")}`);
+  },
+
+  async git() {
+    const value = await client.git();
+    if (options.json) return out(value);
+    if (!value.repository) {
+      console.log(`${value.workspacePath} is not a git repository.`);
+      console.log(`Run "git init" there to work in branches and commits.`);
+      return;
+    }
+    console.log(`on ${value.branch}${value.clean ? " \u00b7 clean" : ""}`);
+    for (const file of value.changed) console.log(`  ${file.status.padEnd(3)} ${file.path}`);
+    if (value.branches.length > 1) console.log(`\nbranches: ${value.branches.join(", ")}`);
+    if (value.recent.length) {
+      console.log("\nrecent:");
+      for (const entry of value.recent) console.log(`  ${entry.hash}  ${entry.subject}`);
+    }
+  },
+
+  async branch() {
+    const value = await client.branch(joined || undefined, options.name);
+    out(options.json ? value : `${value.created ? "started" : "back on"} ${value.branch}`);
+  },
+
+  async diff() {
+    const value = await client.diff(options.staged);
+    if (options.json) return out(value);
+    if (!value.summary) return console.log("nothing changed");
+    console.log(value.patch || value.summary);
+  },
+
+  async commit() {
+    const value = await client.commit(requireText(joined, "A commit message"));
+    if (options.json) return out(value);
+    console.log(value.committed ? `${value.hash}  ${value.subject}` : value.reason);
+  },
+
+  async discard() {
+    const paths = rest.length ? rest : undefined;
+    if (!options.yes && process.stdin.isTTY) {
+      process.stdout.write(paths ? `Throw away changes to ${paths.join(", ")}? [y/N] ` : "Throw away every change? [y/N] ");
+      const answer = await new Promise(resolve => {
+        process.stdin.setEncoding("utf8");
+        process.stdin.once("data", value => resolve(value.trim().toLowerCase()));
+      });
+      process.stdin.pause();
+      if (answer !== "y" && answer !== "yes") return console.log("Left them alone.");
+    }
+    const value = await client.discard(paths);
+    out(options.json ? value : `put back: ${value.discarded.join(", ") || "nothing"}`);
   },
 
   async run() {

@@ -9,6 +9,7 @@ import { ContinuityManager } from "../core/continuity.js";
 import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExistsError } from "./files.js";
 import { Settings } from "./settings.js";
 import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
+import { createGit, branchName, GitRejectedError, NotARepositoryError } from "./git.js";
 import { filesInFailure, parseChanges, repairPrompt, relatedFiles } from "../core/failure.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
@@ -68,6 +69,7 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
   const allowedCommands = (settings.values.COGNITIVE_ALLOWED_COMMANDS ?? "")
     .split(",").map(name => name.trim()).filter(Boolean);
   const run = createRunner({ cwd: workspacePath, allowed: allowedCommands.length ? allowedCommands : DEFAULT_ALLOWED });
+  const git = createGit({ cwd: workspacePath });
   let server;
   const snapshot = async () => ({
     project,
@@ -217,6 +219,60 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       // What a session will cost before anyone starts one.
       if (request.method === "GET" && url.pathname === "/api/session/cost") {
         return json(response, 200, sessionCost());
+      }
+      // Working on a repository is what lets a task outlive one command: a branch
+      // holds work in progress, a commit marks a point worth returning to, and a
+      // diff is how a person reviews it before any of it counts.
+      if (request.method === "GET" && url.pathname === "/api/git") {
+        if (!(await git.isRepository())) {
+          return json(response, 200, { repository: false, workspacePath: workspace.root });
+        }
+        return json(response, 200, {
+          repository: true,
+          branch: await git.currentBranch(),
+          clean: await git.isClean(),
+          changed: await git.changedFiles(),
+          branches: await git.branches(),
+          recent: await git.log(8)
+        });
+      }
+      if (request.method === "POST" && url.pathname === "/api/git/branch") {
+        await git.require();
+        const input = await body(request);
+        const name = input.name?.trim() ? input.name.trim() : branchName(input.intent ?? "");
+        const result = await git.startBranch(name);
+        await mesh.publish(project.id, {
+          type: "branch.started", actorId: "user",
+          payload: { ...result, intent: input.intent ?? null }
+        });
+        return json(response, 201, { ...result, snapshot: await snapshot() });
+      }
+      if (request.method === "POST" && url.pathname === "/api/git/commit") {
+        await git.require();
+        const input = await body(request);
+        const result = await git.commit(input.message ?? "", { paths: input.paths });
+        if (result.committed) {
+          await mesh.publish(project.id, {
+            type: "work.committed", actorId: "user",
+            payload: { hash: result.hash, subject: result.subject, branch: await git.currentBranch() }
+          });
+        }
+        return json(response, result.committed ? 201 : 200, { ...result, snapshot: await snapshot() });
+      }
+      // Nothing merges without someone reading it, so the diff is a first-class
+      // thing to ask for rather than something to reconstruct from the log.
+      if (request.method === "GET" && url.pathname === "/api/git/diff") {
+        await git.require();
+        return json(response, 200, await git.diff({
+          staged: url.searchParams.get("staged") === "true",
+          against: url.searchParams.get("against") ?? undefined
+        }));
+      }
+      if (request.method === "POST" && url.pathname === "/api/git/discard") {
+        await git.require();
+        const input = await body(request);
+        const paths = input.paths?.length ? input.paths : (await git.changedFiles()).map(file => file.path);
+        return json(response, 200, { ...(await git.discard(paths)), snapshot: await snapshot() });
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
         const input = await body(request);
@@ -491,6 +547,8 @@ ${result.stdout}`, { known: tree });
       }
       json(response, 404, { error: "Not found" });
     } catch (error) {
+      if (error instanceof NotARepositoryError) return json(response, 400, { error: error.message });
+      if (error instanceof GitRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof CommandRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof AgentRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof PathOutsideWorkspaceError) return json(response, 403, { error: "That path is outside the workspace" });

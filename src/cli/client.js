@@ -46,6 +46,11 @@ export class CognitiveClient {
   generate(path, instruction, by) { return this.#send("/api/files/generate", { path, instruction, by }); }
   runCommand(command) { return this.#send("/api/run", { command }); }
   fix(paths, command, attempts, by) { return this.#send("/api/fix", { paths, command, attempts, by }); }
+  git() { return this.#request("/api/git"); }
+  branch(intent, name) { return this.#send("/api/git/branch", { intent, name }); }
+  commit(message, paths) { return this.#send("/api/git/commit", { message, paths }); }
+  diff(staged) { return this.#request(`/api/git/diff${staged ? "?staged=true" : ""}`); }
+  discard(paths) { return this.#send("/api/git/discard", { paths }); }
   agents() { return this.#request("/api/agents"); }
   hire(agent) { return this.#send("/api/agents", agent); }
   dismiss(id) { return this.#send("/api/agents", { id }, "DELETE"); }
