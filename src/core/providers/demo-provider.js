@@ -21,11 +21,19 @@ export class DemoProvider {
 
   async work(request) {
     if (request.kind === "build") return { text: this.#document(request) };
-    // A stand-in cannot repair code. Returning the file exactly as it is says so
-    // truthfully, and stops a fix loop immediately instead of spending attempts
-    // on an answer that was never going to change.
-    if (request.kind === "file") return { text: request.existing ?? `// A language model is needed to write this file. Add an API key in Settings.
-` };
+    // A stand-in cannot repair code, one file or a project's worth. Returning
+    // every file exactly as it is says so truthfully, and ends a fix loop at once
+    // instead of spending attempts on an answer that was never going to change.
+    if (request.kind === "repair") {
+      return {
+        text: (request.files ?? [])
+          .map(file => `=== FILE: ${file.path} ===\n${file.content}`)
+          .join("\n\n")
+      };
+    }
+    if (request.kind === "file") {
+      return { text: request.existing ?? "// A language model is needed to write this file. Add an API key in Settings.\n" };
+    }
     if (request.kind === "propose") return { text: this.#propose(request) };
     if (request.kind === "critique") return { text: this.#critique(request) };
     if (request.kind === "synthesis") return { text: this.#synthesis(request) };

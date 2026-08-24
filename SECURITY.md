@@ -61,8 +61,27 @@ Runs are stopped after two minutes. These boundaries have tests in
 `src/platform/runner.test.js` that prove the property rather than assert the
 rule — treat a change there as security-relevant.
 
+## What a repair can change
+
+`POST /api/fix` rewrites files on your machine, so its reach is bounded:
+
+- It only offers a model files that are **already in the workspace** — a stack
+  trace full of node internals and dependency paths yields nothing to rewrite.
+- A change to a file that was not offered is discarded, so a model cannot edit
+  something it was never shown.
+- A run that ends still failing **puts every touched file back** as it was.
+
+Even so, run it against work you can review. It is a repair loop, not a code
+reviewer, and nothing here judges whether a passing test was made to pass for
+the right reason.
+
 ## Scope
 
-Northstar is a prototype with no authentication, no multi-tenancy, and no
-secret management. Do not expose the server to a public network or run it
-with credentials you would not want a local process to hold.
+Northstar is a prototype with no authentication, no multi-tenancy, and no secret
+management beyond a local `.env`. It binds to `127.0.0.1` only. Do not expose the
+server to a network, and do not run it with credentials you would not want a
+local process to hold.
+
+Because it binds to loopback, anything already running on your machine can reach
+it. That is the same trust boundary as your editor and your shell — treat it the
+same way.

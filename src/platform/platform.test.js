@@ -587,31 +587,58 @@ test("Nothing after a semicolon runs", async () => {
   });
 });
 
-test("A fix needs both a file and a command", async () => {
+test("A fix needs a command to run", async () => {
   await serving(async base => {
-    assert.equal((await postJson(`${base}/api/fix`, { command: "npm test" })).status, 400);
-    assert.equal((await postJson(`${base}/api/fix`, { path: "a.js" })).status, 400);
+    assert.equal((await postJson(`${base}/api/fix`, { paths: ["a.js"] })).status, 400);
+    assert.equal((await postJson(`${base}/api/fix`, { command: "  " })).status, 400);
   });
 });
 
-// In demo mode the resident cannot actually repair anything, so the loop must
-// notice it is going nowhere instead of spending attempts.
-test("A fix stops when the file comes back unchanged", async () => {
+// At scale the person does not know which file is at fault — the failure does.
+test("A fix works out which files to change from the failure itself", async () => {
   await serving(async (base, { workspacePath }) => {
-    await writeFile(join(workspacePath, "broken.js"), "process.exit(1);\n", "utf8");
+    await mkdir(join(workspacePath, "src"), { recursive: true });
+    await writeFile(join(workspacePath, "src", "total.js"), "throw new Error('boom');\n", "utf8");
+
+    const value = await postJson(`${base}/api/fix`, { command: "node src/total.js", attempts: 1 })
+      .then(response => response.json());
+
+    assert.ok(value.attempts.length > 0, "it found something to work on without being told");
+    assert.ok(!value.attempts[0].noFilesFound, "the stack trace named the file");
+  });
+});
+
+test("A failure naming no project file says so instead of guessing", async () => {
+  await serving(async base => {
+    const value = await postJson(`${base}/api/fix`, { command: 'node -e "process.exit(1)"', attempts: 2 })
+      .then(response => response.json());
+    assert.equal(value.fixed, false);
+    assert.equal(value.attempts[0].noFilesFound, true);
+  });
+});
+
+// The property that makes repair safe on a real project: a run that ends still
+// failing must leave every file exactly as it was found.
+test("Files are put back when the fix does not work", async () => {
+  await serving(async (base, { workspacePath }) => {
+    const before = "throw new Error('boom');\n";
+    await mkdir(join(workspacePath, "src"), { recursive: true });
+    await writeFile(join(workspacePath, "src", "broken.js"), before, "utf8");
+
     const value = await postJson(`${base}/api/fix`, {
-      path: "broken.js", command: "node broken.js", attempts: 5
+      paths: ["src/broken.js"], command: "node src/broken.js", attempts: 2
     }).then(response => response.json());
 
     assert.equal(value.fixed, false);
-    assert.ok(value.attempts.length <= 2, "it must not keep paying for the same answer");
+    assert.equal(await readFile(join(workspacePath, "src", "broken.js"), "utf8"), before,
+      "a failed repair leaves nothing half-rewritten");
   });
 });
 
 test("A fix that already passes changes nothing", async () => {
   await serving(async (base, { workspacePath }) => {
     await writeFile(join(workspacePath, "fine.js"), "process.exit(0);\n", "utf8");
-    const value = await postJson(`${base}/api/fix`, { path: "fine.js", command: "node fine.js" })
+    const value = await postJson(`${base}/api/fix`, { paths: ["fine.js"], command: "node fine.js" })
       .then(response => response.json());
 
     assert.equal(value.fixed, true);

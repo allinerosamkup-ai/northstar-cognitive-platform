@@ -9,6 +9,7 @@ import { ContinuityManager } from "../core/continuity.js";
 import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExistsError } from "./files.js";
 import { Settings } from "./settings.js";
 import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
+import { filesInFailure, parseChanges, repairPrompt, relatedFiles } from "../core/failure.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
@@ -226,12 +227,11 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
         });
         return json(response, 200, { result, snapshot: await snapshot() });
       }
-      // Write, run, read the error, rewrite, run again. The command is always
-      // the person's — a model can see what broke and change the file, but it
-      // never chooses what executes.
+      // Write, run, read the error, rewrite, run again — across as many files as
+      // the failure implicates. The command is always the person's: a model reads
+      // what broke and edits files, and never chooses what executes.
       if (request.method === "POST" && url.pathname === "/api/fix") {
         const input = await body(request);
-        if (!input.path) return json(response, 400, { error: "A file path is required" });
         if (!input.command?.trim()) return json(response, 400, { error: "A command to run is required" });
 
         const author = input.by
@@ -239,57 +239,104 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
           : mesh.residents(project.id).find(resident => resident.provider.apiKey) ?? mesh.residents(project.id)[0];
         if (!author) return json(response, 400, { error: "No resident is available to fix it" });
 
+        const command = input.command.trim();
         const limit = Math.min(Math.max(Number(input.attempts ?? 3), 1), 6);
+        const tree = await workspace.tree();
         const attempts = [];
-        let result = await run(input.command.trim());
 
+        // Everything touched is remembered as it was. A run that ends still
+        // failing leaves the project exactly as it was found, rather than
+        // half-rewritten across files nobody has looked at.
+        const original = new Map();
+        const remember = async path => {
+          if (original.has(path)) return;
+          original.set(path, await workspace.read(path).then(file => file.content).catch(() => null));
+        };
+
+        let result = await run(command);
         while (!result.ok && attempts.length < limit) {
-          const current = await workspace.read(input.path).then(file => file.content).catch(() => null);
-          if (current === null) break;
+          const blamed = input.paths?.length
+            ? input.paths
+            : filesInFailure(`${result.stderr}
+${result.stdout}`, { known: tree });
+          if (!blamed.length) {
+            attempts.push({ attempt: attempts.length + 1, noFilesFound: true });
+            break;
+          }
 
-          const state = await brain.getState(project.id);
-          let rewritten;
+          // A stack trace names the test, not the mistake, so what those files
+          // import comes too — otherwise the only file on offer is the failing
+          // assertion, and rewriting a test to accept wrong code is not a repair.
+          const shown = await relatedFiles(blamed, {
+            known: tree,
+            read: path => workspace.read(path).then(file => file.content).catch(() => null)
+          });
+          if (!shown.length) {
+            attempts.push({ attempt: attempts.length + 1, noFilesFound: true });
+            break;
+          }
+
+          let changes;
           try {
             const output = await author.provider.work({
-              taskId: `fix:${input.path}`,
-              projectVersion: state.version,
-              kind: "file", existing: current,
-              prompt: filePrompt({
-                path: input.path,
-                existing: current,
-                instruction: `Running this command failed. Fix the file so it passes.
-
-${failureReport(result)}`,
-                attachments: []
-              })
+              taskId: `fix:${command}`,
+              projectVersion: (await brain.getState(project.id)).version,
+              kind: "repair", files: shown, failure: failureReport(result),
+              prompt: repairPrompt({ command, failure: failureReport(result), files: shown, tree })
             });
-            rewritten = fileFromReply(output.text, input.path);
+            changes = parseChanges(output.text, { allowed: shown.map(file => file.path) });
           } catch (error) {
             attempts.push({ attempt: attempts.length + 1, failed: error.message });
             break;
           }
 
-          // A model that returns the file unchanged will return it unchanged
-          // again; another round would only cost money.
-          if (rewritten.trim() === current.trim()) {
+          const real = changes.filter(change =>
+            change.content.trim() !== shown.find(file => file.path === change.path)?.content.trim());
+          if (!real.length) {
             attempts.push({ attempt: attempts.length + 1, unchanged: true });
             break;
           }
 
-          const written = await workspace.write(input.path, rewritten, { overwrite: true });
+          for (const change of real) {
+            await remember(change.path);
+            await workspace.write(change.path, change.content, { overwrite: true });
+          }
           await mesh.publish(project.id, {
             type: "file.written", actorId: author.id,
-            payload: { ...written, instruction: `fixing: ${input.command.trim()}` }
+            payload: { paths: real.map(change => change.path), instruction: `fixing: ${command}` }
           });
-          result = await run(input.command.trim());
-          attempts.push({ attempt: attempts.length + 1, ok: result.ok, exitCode: result.exitCode });
+
+          result = await run(command);
+          attempts.push({
+            attempt: attempts.length + 1,
+            changed: real.map(change => change.path),
+            ok: result.ok,
+            exitCode: result.exitCode
+          });
+        }
+
+        const reverted = [];
+        if (!result.ok && original.size) {
+          for (const [path, content] of original) {
+            if (content === null) continue;
+            await workspace.write(path, content, { overwrite: true });
+            reverted.push(path);
+          }
+          if (reverted.length) {
+            await mesh.publish(project.id, {
+              type: "file.written", actorId: "user",
+              payload: { paths: reverted, instruction: `reverted: ${command} still failed` }
+            });
+          }
         }
 
         await mesh.publish(project.id, {
           type: "command.run", actorId: author.id,
-          payload: { command: result.command, ok: result.ok, exitCode: result.exitCode, attempts: attempts.length }
+          payload: { command, ok: result.ok, exitCode: result.exitCode, attempts: attempts.length }
         });
-        return json(response, 200, { fixed: result.ok, attempts, result, by: author.id, snapshot: await snapshot() });
+        return json(response, 200, {
+          fixed: result.ok, attempts, reverted, result, by: author.id, snapshot: await snapshot()
+        });
       }
       // Producing one working file, where the contract is explicit: the reply is
       // the file. Asking for a document and hoping a file falls out of it does

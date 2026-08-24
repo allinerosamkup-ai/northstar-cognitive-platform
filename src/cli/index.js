@@ -23,7 +23,8 @@ WORKING SESSIONS
 
 RUNNING
   run <command>                   Run a command in the workspace
-  fix <file> -- <command>         Run it; when it fails, the file is rewritten until it passes
+  fix -- <command>                Run it; while it fails, the files it blames are rewritten
+  fix <files> -- <command>        The same, but you say which files may change
 
 BUILDING
   build <instruction>             Produce the next revision of the project document
@@ -224,22 +225,27 @@ const COMMANDS = {
 
   async fix() {
     const separator = rest.indexOf("--");
-    if (separator < 1) throw new Error(`Use: fix <file> -- <command>   for example: fix app/lista.js -- npm test`);
-    const path = rest.slice(0, separator).join(" ");
-    const command = rest.slice(separator + 1).join(" ");
+    const command = separator >= 0 ? rest.slice(separator + 1).join(" ") : joined;
+    const paths = separator > 0 ? rest.slice(0, separator).filter(part => part !== "--") : [];
     requireText(command, "A command to run");
 
-    const value = await client.fix(path, command, options.attempts, options.by);
+    const value = await client.fix(paths, command, options.attempts, options.by);
     if (options.json) return out(value);
+
     for (const attempt of value.attempts) {
-      if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: ${value.by} returned the file unchanged, so it stopped`);
-      else if (attempt.failed) console.log(`  attempt ${attempt.attempt}: ${value.by} could not answer — ${attempt.failed}`);
-      else console.log(`  attempt ${attempt.attempt}: ${attempt.ok ? "passed" : `still failing (exit ${attempt.exitCode})`}`);
+      if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: ${value.by} returned the files unchanged, so it stopped`);
+      else if (attempt.noFilesFound) console.log(`  attempt ${attempt.attempt}: the failure named no file in this project — say which to change`);
+      else if (attempt.failed) console.log(`  attempt ${attempt.attempt}: ${value.by} could not answer \u2014 ${attempt.failed}`);
+      else console.log(`  attempt ${attempt.attempt}: changed ${attempt.changed.join(", ")} \u2014 ${attempt.ok ? "passed" : `still failing (exit ${attempt.exitCode})`}`);
     }
-    if (value.fixed) console.log(`\n${path} passes "${command}" now.`);
-    else {
-      console.log(`\nStill failing after ${value.attempts.length} ${value.attempts.length === 1 ? "attempt" : "attempts"}. The last error:\n`);
-      console.log((value.result.stderr || value.result.stdout || value.result.failure || "").trim().slice(-1200));
+
+    if (value.fixed) {
+      const touched = [...new Set(value.attempts.flatMap(attempt => attempt.changed ?? []))];
+      console.log(`\n"${command}" passes now${touched.length ? `, after changing ${touched.join(", ")}` : ""}.`);
+    } else {
+      console.log(`\nStill failing after ${value.attempts.length} ${value.attempts.length === 1 ? "attempt" : "attempts"}.`);
+      if (value.reverted.length) console.log(`Put back as they were: ${value.reverted.join(", ")}`);
+      console.log(`\n${(value.result.stderr || value.result.stdout || value.result.failure || "").trim().slice(-1200)}`);
       process.exitCode = 1;
     }
   },

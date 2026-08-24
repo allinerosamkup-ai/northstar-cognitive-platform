@@ -96,6 +96,27 @@ export class Workspace {
     };
   }
 
+  // A flat list of the project's files, so a model can see the shape of what it
+  // is changing. Bounded, because a prompt carrying an entire node_modules would
+  // cost more than the repair.
+  async tree(requested = ".", { depth = 4, limit = 400, skip = ["node_modules", "data", ".git", "dist", "build", "coverage"] } = {}) {
+    const found = [];
+    const walk = async (path, level) => {
+      if (level > depth || found.length >= limit) return;
+      const { items } = await this.list(path).catch(() => ({ items: [] }));
+      for (const item of items) {
+        if (found.length >= limit) return;
+        if (item.directory) {
+          if (!skip.includes(item.name)) await walk(item.path, level + 1);
+        } else {
+          found.push(item.path);
+        }
+      }
+    };
+    await walk(requested, 1);
+    return found;
+  }
+
   async read(requested) {
     const file = await this.#safePath(requested);
     const info = await stat(file);

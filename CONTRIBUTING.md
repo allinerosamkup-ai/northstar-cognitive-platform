@@ -27,7 +27,10 @@ copy `.env.example` to `.env` — Northstar reads it at startup.
 
 Tests must never depend on a key: pass `processEnv: {}` to
 `createPlatformServer` so a key in your shell cannot turn a resident live and
-start making real network calls mid-test.
+start making real network calls mid-test. The demo provider answers every kind
+of request in the shape the caller expects — a document for a build, a file
+unchanged for a repair — so a test can exercise a whole flow without a model,
+and a person running demo mode never sees an internal prompt on screen.
 
 ## Run the tests
 
@@ -40,14 +43,36 @@ file, colocated next to the module it tests. Please add or update a test
 alongside any behavior change — the suite is the contract for what the mesh
 guarantees (stale-write protection, event ordering, provider failover).
 
-## How a turn flows
+## How the pieces fit
 
 `POST /api/chat` records your message as an event, then runs the
-`CognitiveArchitect` with the chosen topology. Each resident holds a cursor
-into the shared event log and may only contribute when that cursor is
-current, which is what stops a model from writing over something it never
-saw. `src/core/` holds that machinery; `src/platform/` is the HTTP layer;
-`src/web/` is the interface, plain modules with no build step.
+`CognitiveArchitect` with the chosen topology. Each resident holds a cursor into
+the shared event log and may only contribute when that cursor is current, which
+is what stops a model from writing over something it never saw.
+
+- `src/core/` — the mesh, the append-only log, working sessions, agents,
+  documents, reading a failure. No I/O and no HTTP: everything is against an
+  interface the platform layer supplies, which is why the mesh is testable
+  without a server and the server testable without a model.
+- `src/platform/` — the HTTP server, the workspace (file access behind a path
+  boundary), the command runner, settings and `.env`.
+- `src/web/` — the interface. Plain modules, no build step, no framework.
+- `src/cli/` — the terminal client, over the same Context API the browser uses.
+
+## Where care is owed
+
+Three places in this codebase can do real damage, and each has tests that prove
+the property rather than assert the rule. Treat a change to any of them as
+security-relevant:
+
+- **`src/platform/files.js`** — every path is resolved through symlinks and
+  refused if it lands outside the workspace, for writes as well as reads.
+- **`src/platform/runner.js`** — the command always comes from the person, only
+  allowlisted programs start, they are matched by name so a path cannot
+  substitute one, and nothing runs through a shell.
+- **`src/core/cognitive-mesh.js`** — the staleness check and the write are one
+  serialized unit. Splitting them reintroduces the lost-update bug the whole
+  design exists to prevent.
 
 ## Code style
 
