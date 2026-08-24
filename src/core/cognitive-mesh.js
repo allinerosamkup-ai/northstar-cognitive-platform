@@ -35,6 +35,9 @@ export class CognitiveMesh {
     resident.cursor = (await this.brain.getState(projectId)).version;
     return resident;
   }
+  // Dedicated agents can be dismissed; the events they contributed stay in the
+  // log, because the project's history is not theirs to take away.
+  dismiss(projectId, residentId) { return Boolean(this.#projects.get(projectId)?.delete(residentId)); }
   residents(projectId) { return [...(this.#projects.get(projectId)?.values() ?? [])]; }
   resident(projectId, residentId) { return this.#projects.get(projectId)?.get(residentId); }
   async publish(projectId, input) {

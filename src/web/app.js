@@ -49,6 +49,10 @@ function showView(name) {
   $$("[data-view-panel]").forEach(panel => { panel.hidden = panel.dataset.viewPanel !== name; });
   $$(".rail-item").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   if (name === "artifacts") loadFolder(folder).catch(showFileError);
+  if (name === "workspace") {
+    loadTree(".").catch(() => {});
+    markEditorState();
+  }
 }
 
 /* ------------------------------------------------------------- conversation */
@@ -153,6 +157,120 @@ function renderBrain() {
     ? files.map(event => `<div class="decision">${escapeHtml(event.payload.path)} <span class="muted">${formatSize(event.payload.size)} · event #${event.sequence}</span></div>`).join("")
     : '<div class="decision empty">No files attached yet.</div>';
 }
+
+/* -------------------------------------------------------- workspace editor */
+
+const tree = { open: new Set(["."]), children: new Map() };
+let editing = null;   // { path, modifiedAt, saved, newline }
+
+// A textarea silently rewrites CRLF to LF. Left alone, every Windows file would
+// look edited the moment it opened, and saving would rewrite every line ending
+// in the project without anyone asking for it.
+const detectNewline = text => text.includes("\r\n") ? "\r\n" : "\n";
+const toEditor = text => text.replace(/\r\n/g, "\n");
+const toDisk = (text, newline) => newline === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
+
+async function loadTree(path = ".") {
+  const listing = await request(`/api/files?path=${encodeURIComponent(path)}`);
+  tree.children.set(path || ".", listing.items);
+  renderTree();
+}
+
+function renderTree() {
+  const draw = (path, depth) => (tree.children.get(path) ?? []).map(item => {
+    const open = tree.open.has(item.path);
+    const row = `
+      <button class="tree-row${editing?.path === item.path ? " current" : ""}"
+        style="--depth:${depth}"
+        data-${item.directory ? "folder" : "file"}="${escapeHtml(item.path)}">
+        <span class="tree-mark">${item.directory ? (open ? "▾" : "▸") : "·"}</span>
+        <span class="tree-name">${escapeHtml(item.name)}</span>
+      </button>`;
+    return item.directory && open ? row + draw(item.path, depth + 1) : row;
+  }).join("");
+
+  $("#file-tree").innerHTML = draw(".", 0) || '<p class="empty-document">The workspace is empty.</p>';
+}
+
+function markEditorState() {
+  const field = $("#editor-content");
+  if (!editing) {
+    $("#editor-path").textContent = "nothing open";
+    $("#editor-state").textContent = "";
+    $("#save-file").hidden = $("#reload-file").hidden = true;
+    field.value = "";
+    field.disabled = true;
+    return;
+  }
+  const changed = field.value !== editing.saved;
+  $("#editor-path").textContent = editing.path;
+  $("#editor-state").textContent = editing.conflict
+    ? "changed on disk — reload before saving"
+    : changed ? "unsaved changes" : "saved";
+  $("#editor-state").classList.toggle("failed", Boolean(editing.conflict));
+  $("#save-file").hidden = false;
+  $("#save-file").disabled = !changed || Boolean(editing.conflict);
+  $("#reload-file").hidden = false;
+  field.disabled = false;
+}
+
+async function openFile(path) {
+  const field = $("#editor-content");
+  if (editing && field.value !== editing.saved && !confirm(`${editing.path} has unsaved changes. Discard them?`)) return;
+  try {
+    const file = await request(`/api/files/content?path=${encodeURIComponent(path)}`);
+    const newline = detectNewline(file.content);
+    editing = { path: file.path, modifiedAt: file.modifiedAt, saved: toEditor(file.content), newline, conflict: false };
+    field.value = editing.saved;
+    markEditorState();
+    renderTree();
+  } catch (error) {
+    editing = null;
+    markEditorState();
+    $("#editor-state").textContent = error.message;
+    $("#editor-state").classList.add("failed");
+  }
+}
+
+async function saveFile() {
+  if (!editing) return;
+  const field = $("#editor-content");
+  try {
+    const result = await post("/api/files/write", {
+      path: editing.path, content: toDisk(field.value, editing.newline), overwrite: true,
+      expectedModifiedAt: editing.modifiedAt
+    });
+    editing = { ...editing, modifiedAt: result.file.modifiedAt, saved: field.value, conflict: false };
+    applySnapshot(result.snapshot);
+    markEditorState();
+  } catch (error) {
+    // A clash is not a failure to retry blindly: the other version has to be
+    // seen before this one can reasonably replace it.
+    if (error.status === 409) editing.conflict = true;
+    markEditorState();
+    $("#editor-state").textContent = error.message;
+    $("#editor-state").classList.add("failed");
+  }
+}
+
+/* ---------------------------------------------------------- editor handlers */
+
+$("#file-tree").addEventListener("click", async event => {
+  const row = event.target.closest("[data-folder],[data-file]");
+  if (!row) return;
+  if (row.dataset.file !== undefined) return openFile(row.dataset.file);
+
+  const path = row.dataset.folder;
+  if (tree.open.has(path)) { tree.open.delete(path); renderTree(); }
+  else { tree.open.add(path); await loadTree(path).catch(() => {}); }
+});
+
+$("#editor-content").addEventListener("input", markEditorState);
+$("#editor-content").addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "s") { event.preventDefault(); saveFile(); }
+});
+$("#save-file").addEventListener("click", saveFile);
+$("#reload-file").addEventListener("click", () => editing && openFile(editing.path));
 
 /* ------------------------------------------------------------------ session */
 

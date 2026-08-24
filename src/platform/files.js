@@ -64,6 +64,7 @@ export class Workspace {
           name: entry.name,
           directory: entry.isDirectory(),
           size: info?.size ?? null,
+          modifiedAt: info?.mtimeMs ?? null,
           path: relative(this.root, full).split(sep).join("/")
         };
       }));
@@ -86,9 +87,11 @@ export class Workspace {
 
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, content, "utf8");
+    const written = await stat(file);
     return {
       path: relative(this.root, file).split(sep).join("/"),
       size: Buffer.byteLength(content, "utf8"),
+      modifiedAt: written.mtimeMs,
       replaced: Boolean(existing)
     };
   }
@@ -105,6 +108,7 @@ export class Workspace {
     return {
       path: relative(this.root, file).split(sep).join("/"),
       size: info.size,
+      modifiedAt: info.mtimeMs,
       content: buffer.toString("utf8")
     };
   }

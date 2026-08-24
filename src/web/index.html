@@ -17,6 +17,7 @@
         <button class="rail-item" data-view="brain" title="Project brain">⌁</button>
         <button class="rail-item" data-view="session" title="Working session">⚖</button>
         <button class="rail-item" data-view="document" title="Project document">⌸</button>
+        <button class="rail-item" data-view="workspace" title="Workspace editor">▦</button>
         <button class="rail-item" data-view="artifacts" title="Files">◇</button>
         <button class="rail-item" data-view="settings" title="Settings">···</button>
       </nav>
@@ -158,6 +159,28 @@
         <div class="brain-block">
           <h3>Revision history</h3>
           <div id="revision-history" class="decision-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ WORKSPACE EDITOR ============ -->
+      <section class="view" data-view-panel="workspace" hidden>
+        <div class="section-heading">
+          <div><span class="section-number">E</span><h2>Workspace</h2></div>
+          <span class="muted" id="editor-path">nothing open</span>
+        </div>
+
+        <div class="editor-shell">
+          <aside class="tree" id="file-tree" aria-label="Project files"></aside>
+          <div class="editor">
+            <div class="editor-bar">
+              <span id="editor-state"></span>
+              <div class="editor-actions">
+                <button type="button" id="reload-file" hidden>Reload</button>
+                <button type="button" id="save-file" hidden>Save</button>
+              </div>
+            </div>
+            <textarea id="editor-content" spellcheck="false" placeholder="Pick a file on the left to read and edit it."></textarea>
+          </div>
         </div>
       </section>
 

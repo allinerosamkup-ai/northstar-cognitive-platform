@@ -89,3 +89,50 @@ test("With no document yet the prompt asks for a first revision", () => {
   const prompt = buildPrompt({ instruction: "Start the plan", document: null, attachments: [] });
   assert.match(prompt, /no document yet/i);
 });
+
+// Found by the app analysing its own interface: the reply was 7000 characters
+// of real document containing four code fences, and the parser kept only the
+// first fence's contents. A document about code always contains code.
+test("A document that contains code fences is not mistaken for a wrapped one", () => {
+  const reply = `# Northstar Visual Workspace
+
+**Scope:** the interface.
+
+## 1. Split view
+
+\`\`\`html
+<div class="split"></div>
+\`\`\`
+
+## 2. Live document
+
+\`\`\`css
+.editor { display: grid; }
+\`\`\`
+
+That is the plan.`;
+
+  const revision = parseRevision(reply);
+  assert.equal(revision.title, "Northstar Visual Workspace");
+  assert.match(revision.markdown, /Split view/);
+  assert.match(revision.markdown, /Live document/);
+  assert.match(revision.markdown, /That is the plan\./, "nothing after the fences is lost");
+  assert.equal(revision.markdown, reply, "the whole reply is the document");
+});
+
+test("A reply genuinely wrapped in one fence is still unwrapped", () => {
+  const revision = parseRevision("Sure, here it is:\n\n```markdown\n# The plan\n\nShip it.\n```");
+  assert.equal(revision.markdown, "# The plan\n\nShip it.");
+});
+
+test("A wrapped reply containing an inner fence keeps the inner one", () => {
+  const revision = parseRevision("```markdown\n# The plan\n\n    indented code\n\nDone.\n```");
+  assert.match(revision.markdown, /# The plan/);
+  assert.match(revision.markdown, /Done\./);
+});
+
+test("A long preamble means the fence is content, not a wrapper", () => {
+  const reply = `${"x".repeat(200)}\n\n\`\`\`js\nconst a = 1;\n\`\`\``;
+  const revision = parseRevision(reply);
+  assert.match(revision.markdown, /^x{200}/, "the preamble is part of the document");
+});

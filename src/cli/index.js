@@ -27,8 +27,14 @@ BUILDING
   save [path]                     Write the document to disk (default: documents/<title>.md)
   work <objective>                Run one task with provider failover
 
+DEDICATED AGENTS
+  agents                          Who is in the room, and what the project has learned
+  hire <id> <role> [| scope]      Add an agent that owns part of the project
+  fire <id>                       Dismiss a dedicated agent
+
 FILES
   ls [folder]                     Browse the workspace
+  open <file>                     Print a file from the workspace
   attach <file>                   Put a file's content into the shared project
   put <file> <source>             Write a local file into the workspace
 
@@ -57,7 +63,7 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
-  else if (argument === "--by") options.synthesisBy = options.dividedBy = argv[++index];
+  else if (argument === "--by") options.by = options.synthesisBy = options.dividedBy = argv[++index];
   else positional.push(argument);
 }
 const [command = "status", ...rest] = positional;
@@ -227,6 +233,39 @@ const COMMANDS = {
     for (const item of listing.items) {
       console.log(`  ${item.directory ? "/" : " "} ${item.name}${item.directory ? "" : `  ${item.size} bytes`}`);
     }
+  },
+
+  async agents() {
+    const value = await client.agents();
+    if (options.json) return out(value);
+    console.log("DEDICATED AGENTS");
+    if (!value.agents.length) console.log("  (none — hire one with: hire reviewer \"Code reviewer\" | src/core)");
+    for (const agent of value.agents) {
+      console.log(`  ${agent.id.padEnd(14)} ${agent.role}${agent.scope ? ` \u00b7 owns ${agent.scope}` : ""} \u00b7 on ${agent.backedBy}`);
+    }
+    console.log("\nWHAT THIS PROJECT HAS LEARNED");
+    if (!value.skills.length) console.log("  (nothing yet — it learns from decisions you confirm)");
+    for (const skill of value.skills.slice(0, 10)) console.log(`  \u00b7 ${skill.name}\n      ${skill.approach}`);
+  },
+
+  async hire() {
+    const [id, ...restOfIt] = rest;
+    requireText(id, "An agent id");
+    const [role, scope] = restOfIt.join(" ").split("|").map(part => part.trim());
+    requireText(role, "A role");
+    const { agent } = await client.hire({ id, role, scope, backedBy: options.by });
+    out(options.json ? agent : `${agent.id} joined the project as ${agent.role}${agent.scope ? `, owning ${agent.scope}` : ""}.`);
+  },
+
+  async fire() {
+    const id = requireText(rest[0], "An agent id");
+    await client.dismiss(id);
+    out(options.json ? { id } : `${id} left the project. Everything it contributed stays in the log.`);
+  },
+
+  async open() {
+    const file = await client.open(requireText(joined, "A file path"));
+    out(options.json ? file : file.content);
   },
 
   async attach() {

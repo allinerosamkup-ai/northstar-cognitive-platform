@@ -1,4 +1,8 @@
-const FENCE = /```(?:markdown|md)?\s*\n([\s\S]*?)```/;
+// A model sometimes wraps its whole answer in a fence. But a document *about*
+// code legitimately contains fences of its own, and treating the first one as a
+// wrapper would throw the document away and keep a snippet. So a fence only
+// counts as a wrapper when it opens the reply and nothing follows it.
+const WRAPPER = /^(?:[^\n]{0,120}\n{1,2})?```(?:markdown|md)?[^\n]*\n([\s\S]*?)```\s*$/;
 
 // Models are asked for plain markdown, and mostly comply — but "mostly" is not a
 // contract. Anything unparseable still has to become a usable document rather
@@ -7,7 +11,7 @@ export function parseRevision(text, fallbackTitle = "Project document") {
   const raw = String(text ?? "").trim();
   if (!raw) return { title: fallbackTitle, markdown: "" };
 
-  const fenced = raw.match(FENCE);
+  const fenced = raw.match(WRAPPER);
   const body = (fenced ? fenced[1] : raw).trim();
 
   const heading = body.match(/^#\s+(.+)$/m);

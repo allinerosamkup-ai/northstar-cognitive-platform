@@ -43,6 +43,14 @@ export class CognitiveClient {
   confirmAssignment(assignments) { return this.#send("/api/assign/confirm", { assignments }); }
   sessionCost() { return this.#request("/api/session/cost"); }
 
+  agents() { return this.#request("/api/agents"); }
+  hire(agent) { return this.#send("/api/agents", agent); }
+  dismiss(id) { return this.#send("/api/agents", { id }, "DELETE"); }
+  open(path) { return this.#request(`/api/files/content?path=${encodeURIComponent(path)}`); }
+  save(path, content, expectedModifiedAt) {
+    return this.#send("/api/files/write", { path, content, overwrite: true, expectedModifiedAt });
+  }
+
   files(path = ".") { return this.#request(`/api/files?path=${encodeURIComponent(path)}`); }
   attach(path) { return this.#send("/api/files/attach", { path }); }
   write(path, content, overwrite = false) { return this.#send("/api/files/write", { path, content, overwrite }); }

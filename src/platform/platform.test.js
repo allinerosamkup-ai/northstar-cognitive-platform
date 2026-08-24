@@ -415,3 +415,136 @@ test("The cost of a session is reported before running one", async () => {
     assert.equal(cost.deliberationCalls, 1);
   });
 });
+
+test("A dedicated agent joins the room and answers from its speciality", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/agents`, {
+      id: "reviewer", role: "Code reviewer", scope: "src/core", backedBy: "claude"
+    });
+    assert.equal(response.status, 201);
+    const { snapshot } = await response.json();
+
+    const agent = snapshot.residents.find(resident => resident.id === "reviewer");
+    assert.ok(agent, "it is a resident like any other");
+    assert.match(agent.model, /Code reviewer/);
+    assert.equal(agent.cursor, snapshot.state.version, "and it arrives caught up");
+  });
+});
+
+test("An agent id that is taken or malformed is refused", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/agents`, { id: "gpt", role: "r" })).status, 400);
+    assert.equal((await postJson(`${base}/api/agents`, { id: "Has Space", role: "r" })).status, 400);
+    assert.equal((await postJson(`${base}/api/agents`, { id: "ok", role: "" })).status, 400);
+  });
+});
+
+// Agents a person created must not evaporate with the process.
+test("Dedicated agents come back after a restart", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cognitive-agents-"));
+  const config = {
+    dataPath: join(directory, "brain.jsonl"), port: 0, workspacePath: directory,
+    envPath: join(directory, ".env"), processEnv: {}
+  };
+  try {
+    const first = await createPlatformServer(config);
+    await first.start();
+    await postJson(`http://127.0.0.1:${first.port}/api/agents`, { id: "frontend", role: "Frontend engineer", scope: "src/web" });
+    await first.stop();
+
+    const second = await createPlatformServer(config);
+    await second.start();
+    const snapshot = await fetch(`http://127.0.0.1:${second.port}/api/snapshot`).then(response => response.json());
+    await second.stop();
+
+    assert.ok(snapshot.residents.some(resident => resident.id === "frontend"));
+    assert.deepEqual(snapshot.agents.map(agent => agent.id), ["frontend"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("A dismissed agent leaves, and what it contributed stays", async () => {
+  await serving(async base => {
+    await postJson(`${base}/api/agents`, { id: "reviewer", role: "Code reviewer" });
+    await postJson(`${base}/api/chat`, { text: "hello", topology: "solo", residentIds: ["reviewer"] });
+
+    const removal = await fetch(`${base}/api/agents`, {
+      method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "reviewer" })
+    });
+    assert.equal(removal.status, 200);
+    const { snapshot } = await removal.json();
+
+    assert.ok(!snapshot.residents.some(resident => resident.id === "reviewer"));
+    assert.ok(snapshot.events.some(event => event.actorId === "reviewer"),
+      "the history it took part in is not erased");
+  });
+});
+
+test("Dismissing an agent that is not there says so", async () => {
+  await serving(async base => {
+    const response = await fetch(`${base}/api/agents`, {
+      method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "nobody" })
+    });
+    assert.equal(response.status, 404);
+  });
+});
+
+// The project learns from what a person confirmed, never from raw output.
+test("A confirmed decision becomes something the project knows", async () => {
+  await serving(async base => {
+    let { skills } = await fetch(`${base}/api/agents`).then(response => response.json());
+    assert.deepEqual(skills, [], "nothing is known before anything is settled");
+
+    await postJson(`${base}/api/deliberate`, { question: "Where do we store data?" });
+    await postJson(`${base}/api/deliberate/resolve`, { decision: "On the device, exported to JSON." });
+
+    ({ skills } = await fetch(`${base}/api/agents`).then(response => response.json()));
+    assert.equal(skills.length, 1);
+    assert.match(skills[0].name, /Where do we store data\?/);
+    assert.match(skills[0].approach, /On the device/);
+  });
+});
+
+test("Opening a file returns its content and when it last changed", async () => {
+  await serving(async base => {
+    const file = await fetch(`${base}/api/files/content?path=notes/brief.md`).then(response => response.json());
+    assert.match(file.content, /Ship it in English first\./);
+    assert.ok(file.modifiedAt > 0, "an editor needs to know this to detect a clash");
+  });
+});
+
+test("Opening a file outside the workspace is refused", async () => {
+  await serving(async base => {
+    const response = await fetch(`${base}/api/files/content?path=${encodeURIComponent("../outside-secret.txt")}`);
+    assert.equal(response.status, 403);
+  });
+});
+
+// Two editors on one file: the second save must not erase the first silently.
+test("Saving an edit over someone else's change is stopped", async () => {
+  await serving(async base => {
+    const opened = await fetch(`${base}/api/files/content?path=notes/brief.md`).then(response => response.json());
+    await postJson(`${base}/api/files/write`, { path: "notes/brief.md", content: "changed elsewhere", overwrite: true });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const stale = await postJson(`${base}/api/files/write`, {
+      path: "notes/brief.md", content: "my edit", overwrite: true, expectedModifiedAt: opened.modifiedAt
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).staleEdit, true);
+
+    const current = await fetch(`${base}/api/files/content?path=notes/brief.md`).then(response => response.json());
+    assert.equal(current.content, "changed elsewhere", "the other edit survives");
+  });
+});
+
+test("Saving an edit nobody touched goes through", async () => {
+  await serving(async base => {
+    const opened = await fetch(`${base}/api/files/content?path=notes/brief.md`).then(response => response.json());
+    const saved = await postJson(`${base}/api/files/write`, {
+      path: "notes/brief.md", content: "my edit", overwrite: true, expectedModifiedAt: opened.modifiedAt
+    });
+    assert.equal(saved.status, 201);
+  });
+});

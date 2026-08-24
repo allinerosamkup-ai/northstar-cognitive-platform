@@ -12,6 +12,8 @@ import { parseRevision, proposedFiles, nextRevision, buildPrompt } from "../core
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
 import { assignmentCost } from "../core/assignment.js";
+import { validateAgent, agentBriefing, specialise, AgentRejectedError } from "../core/agents.js";
+import { skillsFrom, briefingSkills } from "../core/skills.js";
 
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
 
@@ -32,7 +34,31 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
   if (!project) project = await brain.createProject({ name: "Northstar", purpose: "Build a model-independent cognitive project platform" });
   const mesh = new CognitiveMesh(brain);
   const settings = await Settings.load({ envPath, processEnv });
-  for (const resident of createResidentProviders(settings.values)) await mesh.addResident(project.id, resident);
+  const baseResidents = createResidentProviders(settings.values);
+  for (const resident of baseResidents) await mesh.addResident(project.id, resident);
+
+  // A dedicated agent is a resident with a job. It is recorded in the log, so
+  // restoring the room after a restart means replaying those events — the agents
+  // a person created must not evaporate with the process.
+  const dedicated = new Map();
+  const briefingFor = async spec => agentBriefing({
+    ...spec, skills: briefingSkills(await brain.eventsSince(project.id, 0))
+  });
+  const raise = async spec => {
+    const backing = baseResidents.find(resident => resident.id === spec.backedBy) ?? baseResidents[0];
+    const resident = {
+      id: spec.id,
+      model: `${spec.role} (${backing.model})`,
+      provider: specialise(backing.provider, await briefingFor(spec))
+    };
+    await mesh.addResident(project.id, resident);
+    dedicated.set(spec.id, spec);
+    return resident;
+  };
+  for (const event of await brain.eventsSince(project.id, 0)) {
+    if (event.type === "agent.created") await raise(event.payload);
+    if (event.type === "agent.dismissed") { mesh.dismiss(project.id, event.payload.id); dedicated.delete(event.payload.id); }
+  }
   const architect = new CognitiveArchitect(mesh, brain);
   const continuity = new ContinuityManager(mesh, brain);
   const session = new WorkingSession(mesh, brain);
@@ -45,7 +71,9 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
     residents: mesh.residents(project.id).map(({ provider, ...resident }) => ({ ...resident, provider: provider.name, live: Boolean(provider.apiKey) })),
     settings: settings.describe(),
     environment: { dataPath, workspacePath: workspace.root },
-    sessionCost: sessionCost()
+    sessionCost: sessionCost(),
+    agents: [...dedicated.values()],
+    skills: skillsFrom(await brain.eventsSince(project.id, 0))
   });
 
   // What a working session will spend, so it is on screen before anyone starts one.
@@ -101,6 +129,29 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       }
       // The residents read and answer each other, then one writes the conclusion.
       // What comes back is a proposal: nothing is decided until a person says so.
+      if (request.method === "GET" && url.pathname === "/api/agents") {
+        return json(response, 200, {
+          agents: [...dedicated.values()],
+          backing: baseResidents.map(resident => ({ id: resident.id, model: resident.model })),
+          skills: skillsFrom(await brain.eventsSince(project.id, 0))
+        });
+      }
+      if (request.method === "POST" && url.pathname === "/api/agents") {
+        const input = await body(request);
+        const spec = validateAgent(input, mesh.residents(project.id).map(resident => resident.id));
+        spec.backedBy = baseResidents.some(resident => resident.id === input.backedBy) ? input.backedBy : baseResidents[0].id;
+        await raise(spec);
+        await mesh.publish(project.id, { type: "agent.created", actorId: "user", payload: spec });
+        return json(response, 201, { agent: spec, snapshot: await snapshot() });
+      }
+      if (request.method === "DELETE" && url.pathname === "/api/agents") {
+        const input = await body(request);
+        if (!dedicated.has(input.id)) return json(response, 404, { error: `No dedicated agent called ${input.id}` });
+        mesh.dismiss(project.id, input.id);
+        dedicated.delete(input.id);
+        await mesh.publish(project.id, { type: "agent.dismissed", actorId: "user", payload: { id: input.id } });
+        return json(response, 200, { snapshot: await snapshot() });
+      }
       if (request.method === "POST" && url.pathname === "/api/deliberate") {
         const input = await body(request);
         if (!input.question?.trim()) return json(response, 400, { error: "A question is required" });
@@ -191,6 +242,20 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       if (request.method === "POST" && url.pathname === "/api/files/write") {
         const input = await body(request);
         if (!input.path) return json(response, 400, { error: "A file path is required" });
+
+        // An edit carries the modification time it was opened at. If the file
+        // moved on since — another editor, a build, the residents — saving would
+        // erase that change silently, so it stops and says so.
+        if (input.expectedModifiedAt) {
+          const current = await workspace.read(input.path).catch(() => null);
+          if (current && Math.abs(current.modifiedAt - input.expectedModifiedAt) > 1) {
+            return json(response, 409, {
+              error: "This file changed since you opened it. Reload it to see the new version before saving.",
+              path: input.path,
+              staleEdit: true
+            });
+          }
+        }
         const written = await workspace.write(input.path, input.content ?? "", { overwrite: Boolean(input.overwrite) });
         await mesh.publish(project.id, { type: "file.written", actorId: "user", payload: written });
         return json(response, 201, { file: written, snapshot: await snapshot() });
@@ -223,6 +288,14 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       }
       if (request.method === "GET" && url.pathname === "/api/files") {
         return json(response, 200, await workspace.list(url.searchParams.get("path") ?? "."));
+      }
+      // Opening a file to edit it. Same boundary as everything else, and the
+      // modification time comes with it so the editor can tell whether the file
+      // changed underneath while it was open.
+      if (request.method === "GET" && url.pathname === "/api/files/content") {
+        const path = url.searchParams.get("path");
+        if (!path) return json(response, 400, { error: "A file path is required" });
+        return json(response, 200, await workspace.read(path));
       }
       if (request.method === "POST" && url.pathname === "/api/files/attach") {
         const input = await body(request);
@@ -259,6 +332,7 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       }
       json(response, 404, { error: "Not found" });
     } catch (error) {
+      if (error instanceof AgentRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof PathOutsideWorkspaceError) return json(response, 403, { error: "That path is outside the workspace" });
       if (error instanceof FileExistsError) return json(response, 409, { error: error.message, path: error.path });
       if (error instanceof AttachmentRejectedError) return json(response, 400, { error: error.message });
