@@ -61,14 +61,25 @@ Runs are stopped after two minutes. These boundaries have tests in
 `src/platform/runner.test.js` that prove the property rather than assert the
 rule — treat a change there as security-relevant.
 
+## What the repository access can do
+
+Working on a branch runs git in the workspace. Only a listed set of subcommands
+is available — `push`, `remote`, `config` and `reset` are deliberately absent —
+so this can branch, commit, diff and discard, and cannot publish anything or
+rewrite history. Commits use your own git identity; the app never sets one.
+
+Nothing goes through a shell, so a branch name stays a branch name.
+
 ## What a repair can change
 
 `POST /api/fix` rewrites files on your machine, so its reach is bounded:
 
 - It only offers a model files that are **already in the workspace** — a stack
   trace full of node internals and dependency paths yields nothing to rewrite.
-- A change to a file that was not offered is discarded, so a model cannot edit
+- An edit to a file that was not offered is discarded, so a model cannot touch
   something it was never shown.
+- An edit is applied only where its text appears **exactly once**. Nowhere means
+  the model misremembered the file; twice is ambiguous. Both are refused.
 - A run that ends still failing **puts every touched file back** as it was.
 
 Even so, run it against work you can review. It is a repair loop, not a code

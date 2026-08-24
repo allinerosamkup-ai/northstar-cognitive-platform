@@ -50,6 +50,7 @@ of it.
 | **Edit alongside them** | A file tree and editor in the browser, saving to the same workspace |
 | **Dedicated agents** | Give an agent a role and a part of the project it owns |
 | **Remember what worked** | Decisions you confirmed become context every agent carries |
+| **Work on a branch** | Start work on its own branch, read the diff, commit it or throw it away |
 
 ## What it is not, yet
 
@@ -60,9 +61,9 @@ Read this before deciding whether it fits your work.
 - **Repair is bounded.** It follows imports from the failing file, up to eight
   files, and retries three times by default. A failure spread across a large
   codebase will exhaust that.
-- **It does not plan work over time.** There is no backlog, no branch, no
-  awareness of git. It changes files in place and puts them back if the repair
-  fails.
+- **It does not plan work over time.** Work can live on a branch and be
+  committed, but there is no backlog, no notion of a task spanning sessions, and
+  nothing that decides what to do next.
 - **Cost is real.** A working session spends two provider calls per participant
   plus one; a repair spends one per attempt. Both are shown before you start.
 
@@ -132,6 +133,9 @@ npm run cli -- make src/x.js "what it should do"
 npm run cli -- run "npm test"
 npm run cli -- fix -- npm test
 
+# the repository
+npm run cli -- git / branch / diff / commit / discard
+
 # the project
 npm run cli -- ls / open / attach / put
 npm run cli -- agents / hire / fire
@@ -198,29 +202,52 @@ npm run cli -- fix src/total.js -- npm test    # the same, but only this file ma
 
 `fix` runs the command, and while it fails:
 
-1. It reads the failure for files **in this project** — skipping node internals
+1. It reads the failure for files **in this project**, skipping node internals
    and dependency code, which are not yours to rewrite.
 2. A stack trace names where an assertion blew up, which is the test, almost
    never where the mistake lives. So it follows what those files import, a level
    at a time, up to eight files.
-3. It sends the failure and those files to a resident, applies whatever comes
-   back, and runs the command again.
+3. It asks for **the exact text to replace**, not a rewritten file, and applies
+   an edit only where that text appears exactly once. None means the model
+   misremembered the file; more than one is ambiguous. Both are refused rather
+   than guessed at.
 
-It stops early when the files come back unchanged, because the same answer will
-not pass a second time either. And **if it ends still failing, every file it
-touched is put back exactly as it was** — a repair that did not work leaves
-nothing half-rewritten across files you have not looked at.
+Asking for whole files was the first design and it did not survive contact with
+this project's own code: past a few dozen lines a model answers with the part it
+changed, and writing that as the whole file destroys everything else. Editing in
+place preserves comments and formatting by construction rather than by asking
+nicely.
 
-Given a failing assertion in a test whose maths was wrong two imports away, it
-found the file the trace never named, corrected the formula, and left the file
-that was already right alone.
+Two things hold when it goes wrong. Each attempt starts from where the repair
+began, never from the last failed one, so a rewrite that breaks the file cannot
+send the next attempt off debugging its own damage. And **if it ends still
+failing, every file it touched is put back exactly as it was.**
 
-**The command is always yours.** A resident can read a failure and rewrite a
-file; it can never choose what executes. Only programs on an allowlist start
-(`npm`, `node`, `python`, `go`, `cargo`, … — narrow it with
+**The command is always yours.** A resident can read a failure and edit a file;
+it can never choose what executes. Only programs on an allowlist start (`npm`,
+`node`, `python`, `go`, `cargo`, … — narrow it with
 `COGNITIVE_ALLOWED_COMMANDS`), they are matched by name so a path cannot
 substitute one, nothing runs through a shell so a semicolon is an argument and
 not a second command, and a run that will not end is stopped after two minutes.
+
+## Working on a repository
+
+A task worth doing rarely finishes in one command, so work can live on its own
+branch and be reviewed before it counts.
+
+```sh
+npm run cli -- git                     # branch, what changed, recent commits
+npm run cli -- branch "fix the discount maths"
+npm run cli -- diff                    # read it before deciding
+npm run cli -- commit "Correct the discount formula"
+npm run cli -- discard                 # or throw it away
+```
+
+Branches are named from what the work is for, so they are recognisable in your
+own repository afterwards. Commits use your git identity — this never invents
+one. Only a listed set of subcommands can run: `push`, `remote`, `config` and
+`reset` are deliberately absent, so this is a way to work in a repository and
+not a way to reach arbitrary git.
 
 ## Building something
 
