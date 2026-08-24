@@ -24,6 +24,7 @@ WORKING SESSIONS
 BUILDING
   build <instruction>             Produce the next revision of the project document
   document                        Print the current document
+  make <path> <instruction>       Write one working file, straight to disk
   save [path]                     Write the document to disk (default: documents/<title>.md)
   work <objective>                Run one task with provider failover
 
@@ -201,6 +202,14 @@ const COMMANDS = {
     console.log(`\n${value.revision.markdown}\n`);
     console.log(`Revision ${value.revision.version} · built by ${value.revision.contributors.join(", ")}`);
     if (value.files.length) console.log(`Proposed files: ${value.files.map(file => file.path).join(", ")}`);
+  },
+
+  async make() {
+    const [path, ...instruction] = rest;
+    requireText(path, "A file path");
+    requireText(instruction.join(" "), "An instruction");
+    const value = await client.generate(path, instruction.join(" "), options.by);
+    out(options.json ? value : `${value.file.path} written by ${value.by} (${value.file.size} bytes)${value.file.replaced ? " — replaced the previous version" : ""}`);
   },
 
   async document() {

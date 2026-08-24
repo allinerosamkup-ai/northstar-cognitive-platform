@@ -8,7 +8,7 @@ import { createResidentProviders } from "../core/providers/provider-factory.js";
 import { ContinuityManager } from "../core/continuity.js";
 import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExistsError } from "./files.js";
 import { Settings } from "./settings.js";
-import { parseRevision, proposedFiles, nextRevision, buildPrompt } from "../core/document.js";
+import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
 import { assignmentCost } from "../core/assignment.js";
@@ -212,6 +212,39 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       // What a session will cost before anyone starts one.
       if (request.method === "GET" && url.pathname === "/api/session/cost") {
         return json(response, 200, sessionCost());
+      }
+      // Producing one working file, where the contract is explicit: the reply is
+      // the file. Asking for a document and hoping a file falls out of it does
+      // not survive contact with how differently models format things.
+      if (request.method === "POST" && url.pathname === "/api/files/generate") {
+        const input = await body(request);
+        if (!input.path) return json(response, 400, { error: "A file path is required" });
+        if (!input.instruction?.trim()) return json(response, 400, { error: "An instruction is required" });
+
+        const existing = await workspace.read(input.path).then(file => file.content).catch(() => null);
+        const author = input.by
+          ? mesh.resident(project.id, input.by)
+          : mesh.residents(project.id).find(resident => resident.provider.apiKey) ?? mesh.residents(project.id)[0];
+        if (!author) return json(response, 400, { error: "No resident is available to write it" });
+
+        const state = await brain.getState(project.id);
+        const output = await author.provider.work({
+          taskId: `generate:${input.path}`,
+          projectVersion: state.version,
+          prompt: filePrompt({
+            path: input.path,
+            instruction: input.instruction.trim(),
+            existing,
+            attachments: await attachments()
+          })
+        });
+        const content = fileFromReply(output.text, input.path);
+        const written = await workspace.write(input.path, content, { overwrite: true });
+        await mesh.publish(project.id, {
+          type: "file.written", actorId: author.id,
+          payload: { ...written, instruction: input.instruction.trim(), replaced: Boolean(existing) }
+        });
+        return json(response, 201, { file: written, by: author.id, snapshot: await snapshot() });
       }
       // The point of the product: the residents produce the project document
       // itself, revision by revision, rather than talking about it.

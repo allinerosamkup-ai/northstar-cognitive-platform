@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseRevision, proposedFiles, nextRevision, buildPrompt } from "./document.js";
+import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "./document.js";
 
 test("Clean markdown yields its title and body", () => {
   const revision = parseRevision("# Launch plan\n\nShip the prototype first.");
@@ -135,4 +135,69 @@ test("A long preamble means the fence is content, not a wrapper", () => {
   const reply = `${"x".repeat(200)}\n\n\`\`\`js\nconst a = 1;\n\`\`\``;
   const revision = parseRevision(reply);
   assert.match(revision.markdown, /^x{200}/, "the preamble is part of the document");
+});
+
+// Found by asking the app to build a working app: the model put the filename in
+// one fence and the code in another. Unwrapping from the first fence to the last
+// spliced them together and destroyed the file it had just written.
+test("A reply with several fences keeps every one of them intact", () => {
+  const reply = [
+    "# Shopping List App",
+    "",
+    "```html",
+    "app/lista.html",
+    "```",
+    "",
+    "```html",
+    "<!DOCTYPE html>",
+    "<h1>Lista</h1>",
+    "```"
+  ].join("\n");
+
+  const revision = parseRevision(reply);
+  assert.equal((revision.markdown.match(/```/g) ?? []).length, 4,
+    "all four fence markers survive");
+
+  const files = proposedFiles(revision.markdown);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].path, "app/lista.html");
+  assert.match(files[0].content, /<!DOCTYPE html>/, "the code is recoverable, not spliced away");
+});
+
+// The format a model chooses varies run to run: the same request produced the
+// path inside a fence, then beside one, then no fence at all. When one file is
+// the point, the reply is the file and the decoration is stripped.
+test("A file reply is recovered whatever decoration the model adds", () => {
+  const html = '<!DOCTYPE html>\n<h1>Lista</h1>';
+  for (const [shape, reply] of [
+    ["bare", html],
+    ["named line first", `app/lista.html\n${html}`],
+    ["named in backticks", `\`app/lista.html\`\n${html}`],
+    ["fenced", "```html\n" + html + "\n```"],
+    ["named then fenced", "app/lista.html\n```html\n" + html + "\n```"]
+  ]) {
+    assert.equal(fileFromReply(reply, "app/lista.html"), `${html}\n`, shape);
+  }
+});
+
+test("A file that legitimately contains fences keeps them", () => {
+  const markdown = "# Readme\n\n```js\nconst a = 1;\n```\n\nDone.";
+  assert.equal(fileFromReply(markdown, "README.md"), `${markdown}\n`);
+});
+
+test("A leading line that is not this file's name is kept as content", () => {
+  assert.match(fileFromReply("other.txt\nreal content", "app/lista.html"), /^other\.txt/);
+});
+
+test("The file prompt demands the file and nothing around it", () => {
+  const prompt = filePrompt({ path: "app/lista.html", instruction: "A shopping list", existing: null, attachments: [] });
+  assert.match(prompt, /complete contents of the file `app\/lista\.html`/);
+  assert.match(prompt, /no markdown fence around it/);
+  assert.match(prompt, /A shopping list/);
+});
+
+test("The file prompt shows the file as it is when rewriting one", () => {
+  const prompt = filePrompt({ path: "a.js", instruction: "add logging", existing: "const a = 1;" });
+  assert.match(prompt, /THE FILE AS IT IS NOW/);
+  assert.match(prompt, /const a = 1;/);
 });

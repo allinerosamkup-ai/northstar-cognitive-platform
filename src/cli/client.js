@@ -43,6 +43,7 @@ export class CognitiveClient {
   confirmAssignment(assignments) { return this.#send("/api/assign/confirm", { assignments }); }
   sessionCost() { return this.#request("/api/session/cost"); }
 
+  generate(path, instruction, by) { return this.#send("/api/files/generate", { path, instruction, by }); }
   agents() { return this.#request("/api/agents"); }
   hire(agent) { return this.#send("/api/agents", agent); }
   dismiss(id) { return this.#send("/api/agents", { id }, "DELETE"); }

@@ -9,3 +9,6 @@ node_modules/
 
 # Documents the intelligences build and you chose to save
 documents/
+
+# Apps the residents build and you chose to keep
+app/
