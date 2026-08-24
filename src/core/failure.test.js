@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filesInFailure, parseChanges, repairPrompt, importedBy, relatedFiles } from "./failure.js";
+import { filesInFailure, parseChanges, repairPrompt, importedBy, relatedFiles, looksTruncated, parseEdits, applyEdits, editPrompt } from "./failure.js";
 
 const PROJECT = ["src/total.js", "src/cart.js", "src/total.test.js", "index.js"];
 
@@ -175,4 +175,126 @@ test("A file that cannot be read is skipped rather than breaking the walk", asyn
     known: ["gone.js", "here.js"]
   });
   assert.deepEqual(chosen.map(file => file.path), ["here.js"]);
+});
+
+// Found by repairing this project's own code: the fix was right and every
+// comment in the file was gone. On a real codebase that is not a repair.
+test("A repair is told to change as little as possible", () => {
+  const prompt = repairPrompt({
+    command: "npm test", failure: "boom",
+    files: [{ path: "src/a.js", content: "// why this exists\nexport const a = 1;" }],
+    tree: []
+  });
+  assert.match(prompt, /Keep every comment/);
+  assert.match(prompt, /Change as little as possible/);
+});
+
+// Found by repairing this project's own code: asked for a complete file, the
+// model answered with only the function it had changed. Written as the whole
+// file that is a truncation, and the next attempt then debugs the damage.
+test("A change that loses most of a file is recognised as truncated", () => {
+  const whole = `// a header comment\n${"const line = 1;\n".repeat(40)}`;
+  assert.equal(looksTruncated(whole, "const line = 1;\n"), true);
+  assert.equal(looksTruncated(whole, whole.replace("const line = 1;", "const line = 2;")), false);
+});
+
+test("A genuinely small file may be rewritten to something smaller", () => {
+  assert.equal(looksTruncated("export const a = 1;\n", "export const a = 2;\n"), false);
+});
+
+test("A file that did not exist before is never truncated", () => {
+  assert.equal(looksTruncated(null, "anything"), false);
+  assert.equal(looksTruncated("", "anything"), false);
+});
+
+test("A fenced block loses its wrapper and keeps its own inner fences", () => {
+  const reply = "=== FILE: README.md ===\n```markdown\n# Title\n\n```js\nconst a = 1;\n```\n\nDone.\n```";
+  const content = parseChanges(reply)[0].content;
+  assert.doesNotMatch(content, /^```markdown/);
+  assert.match(content, /```js/, "the inner fence belongs to the document");
+  assert.match(content, /Done\./);
+});
+
+const EDIT_REPLY = [
+  "=== FILE: src/total.js ===",
+  "<<<<<<< SEARCH",
+  "  return a - b;",
+  "=======",
+  "  return a + b;",
+  ">>>>>>> REPLACE"
+].join("\n");
+
+// Asking for a whole file failed on this project's own code: a sixty-line file
+// came back as ten. An exact replacement is a far smaller thing to get right.
+test("An edit names the file, the text to find, and what replaces it", () => {
+  assert.deepEqual(parseEdits(EDIT_REPLY, { allowed: ["src/total.js"] }), [
+    { path: "src/total.js", search: "  return a - b;", replace: "  return a + b;" }
+  ]);
+});
+
+test("Several edits across several files come back in order", () => {
+  const reply = [EDIT_REPLY, "=== FILE: src/cart.js ===", "<<<<<<< SEARCH", "old", "=======", "new", ">>>>>>> REPLACE"].join("\n");
+  assert.deepEqual(parseEdits(reply).map(edit => edit.path), ["src/total.js", "src/cart.js"]);
+});
+
+test("An edit to a file that was not offered is refused", () => {
+  assert.deepEqual(parseEdits(EDIT_REPLY, { allowed: ["src/other.js"] }), []);
+});
+
+// An empty search would match at the start of the file and replace nothing
+// meaningful, which is worse than doing nothing.
+test("An edit with nothing to search for is refused", () => {
+  const reply = "=== FILE: a.js ===\n<<<<<<< SEARCH\n\n=======\nsomething\n>>>>>>> REPLACE";
+  assert.deepEqual(parseEdits(reply), []);
+});
+
+test("Everything around an edit survives it", () => {
+  const before = "// why this exists\nexport function total(a, b) {\n  return a - b;\n}\n// end\n";
+  const after = applyEdits(before, parseEdits(EDIT_REPLY));
+  assert.match(after, /\/\/ why this exists/);
+  assert.match(after, /\/\/ end/);
+  assert.match(after, /return a \+ b;/);
+  assert.doesNotMatch(after, /return a - b;/);
+});
+
+// Zero means the model is editing a file it misremembered; twice is ambiguous.
+// Guessing either way would corrupt the file quietly.
+test("An edit that matches nothing is refused, not guessed at", () => {
+  assert.throws(() => applyEdits("something else entirely", parseEdits(EDIT_REPLY)),
+    /was not found in src\/total\.js/);
+});
+
+test("An edit that matches twice is refused", () => {
+  const twice = "  return a - b;\n  return a - b;\n";
+  assert.throws(() => applyEdits(twice, parseEdits(EDIT_REPLY)), /appears 2 times/);
+});
+
+test("Replacement text is inserted literally, not as a pattern", () => {
+  const reply = "=== FILE: a.js ===\n<<<<<<< SEARCH\nold\n=======\n$& and $1 stay as written\n>>>>>>> REPLACE";
+  assert.equal(applyEdits("old", parseEdits(reply)), "$& and $1 stay as written");
+});
+
+test("The edit prompt asks for edits and forbids whole files", () => {
+  const prompt = editPrompt({
+    command: "npm test", failure: "boom",
+    files: [{ path: "src/total.js", content: "old" }], tree: []
+  });
+  assert.match(prompt, /<<<<<<< SEARCH/);
+  assert.match(prompt, />>>>>>> REPLACE/);
+  assert.match(prompt, /Do not repeat a whole file/);
+  assert.match(prompt, /appears\s*\n?\s*exactly once/);
+});
+
+// What the prompt asks for and what the parser reads have to be the same thing.
+test("An edit written the way the prompt describes is one the parser reads", () => {
+  const prompt = editPrompt({ command: "c", failure: "f", files: [{ path: "a.js", content: "x" }], tree: [] });
+  const shape = prompt.slice(prompt.indexOf("=== FILE: path/to/file.js ==="));
+  const reply = shape
+    .split("\n")
+    .slice(0, 6)
+    .join("\n")
+    .replace("path/to/file.js", "a.js")
+    .replace("the exact text as it appears now, copied character for character", "x")
+    .replace("what it should say instead", "y");
+  assert.deepEqual(parseEdits(reply, { allowed: ["a.js"] }), [{ path: "a.js", search: "x", replace: "y" }]);
 });

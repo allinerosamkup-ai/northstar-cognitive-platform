@@ -58,13 +58,27 @@ export function parseChanges(reply, { allowed = [] } = {}) {
     .filter(change => change.content.trim().length > 0);
 }
 
-// Models fence code even when told not to. One fence around the whole block is
-// decoration; more than one belongs to the file itself.
+// Models fence code even when told not to. A fence opening the block and a fence
+// closing it is decoration; fences in between belong to the file.
 function stripFence(text) {
   const body = text.replace(/^\n+/, "").replace(/\n+$/, "");
-  if ((body.match(/```/g) ?? []).length !== 2) return body;
-  const unwrapped = body.match(/^```[\w+-]*[^\n]*\n([\s\S]*)```$/);
-  return unwrapped ? unwrapped[1] : body;
+  if (!body.startsWith("```")) return body;
+  const opened = body.replace(/^```[\w+-]*[^\n]*\n?/, "");
+  return opened.replace(/\n?```\s*$/, "");
+}
+
+// A model asked for a complete file sometimes answers with only the part it
+// changed. Written as the whole file that is not an edit — it is a truncation
+// that destroys everything else, and the next attempt then debugs the damage
+// instead of the bug. A change that loses most of a file is refused.
+const SHRINK_FLOOR = 0.5;
+const SMALL_ENOUGH_TO_REWRITE = 400;
+
+export function looksTruncated(before, after) {
+  const previous = String(before ?? "").trim();
+  const next = String(after ?? "").trim();
+  if (!previous || previous.length <= SMALL_ENOUGH_TO_REWRITE) return false;
+  return next.length < previous.length * SHRINK_FLOOR;
 }
 
 export function repairPrompt({ command, failure, files, tree }) {
@@ -81,7 +95,12 @@ export function repairPrompt({ command, failure, files, tree }) {
       "=== FILE: path/to/file.js ===",
       "",
       "Leave out any file you are not changing. Do not explain, do not summarise,",
-      `and do not change a file that is not listed above. The command was: ${command}`
+      "and do not change a file that is not listed above.",
+      "",
+      "Change as little as possible. Keep every comment, every blank line and",
+      "every piece of formatting that is not part of the fix — a repair that",
+      "quietly strips a file's documentation is not one a person will accept.",
+      `The command was: ${command}`
     ].join("\n")
   ].filter(Boolean).join("\n\n");
 }
@@ -137,4 +156,86 @@ export async function relatedFiles(blamed, { read, known = [], depth = 6, limit 
     frontier = next.filter(path => !chosen.some(file => file.path === path));
   }
   return chosen;
+}
+
+// Asking a model to reproduce a whole file does not hold: on anything past a
+// few dozen lines it answers with the part it changed, which written as the
+// whole file destroys the rest. Asking for the exact text to replace is a much
+// smaller thing to get right, and it preserves everything else by construction —
+// comments and formatting included, with nothing to instruct and nothing to trust.
+
+const EDIT = /^<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n?=======\r?\n([\s\S]*?)\r?\n?>>>>>>> REPLACE$/gm;
+
+export function parseEdits(reply, { allowed = [] } = {}) {
+  const permitted = new Set(allowed);
+  const edits = [];
+  let path = null;
+
+  // The lookahead starts with \s* deliberately: "(?===" reads as "(?=" followed
+  // by "==", which then fails to match a three-equals header and silently never
+  // splits, so every edit lands on the first file named.
+  for (const block of String(reply ?? "").split(/^(?=\s*===\s*FILE:)/m)) {
+    const header = block.match(/^===\s*FILE:\s*(\S+)\s*===/);
+    if (header) path = header[1].replace(/\\/g, "/");
+    if (!path) continue;
+    if (permitted.size && !permitted.has(path)) continue;
+
+    for (const match of block.matchAll(EDIT)) {
+      const [, search, replace] = match;
+      if (!search.trim()) continue;    // an empty search would match anywhere
+      edits.push({ path, search, replace });
+    }
+  }
+  return edits;
+}
+
+export class EditNotApplicableError extends Error {
+  constructor(reason, path) {
+    super(reason);
+    this.name = "EditNotApplicableError";
+    this.path = path;
+  }
+}
+
+// Applied by exact match, and only when the text appears exactly once. Twice is
+// ambiguous and zero means the model is editing a file it misremembered — both
+// are refused rather than guessed at.
+export function applyEdits(content, edits) {
+  let next = String(content ?? "");
+  for (const edit of edits) {
+    const occurrences = next.split(edit.search).length - 1;
+    if (occurrences === 0) {
+      throw new EditNotApplicableError(`the text to replace was not found in ${edit.path}`, edit.path);
+    }
+    if (occurrences > 1) {
+      throw new EditNotApplicableError(`the text to replace appears ${occurrences} times in ${edit.path}`, edit.path);
+    }
+    next = next.replace(edit.search, () => edit.replace);
+  }
+  return next;
+}
+
+export function editPrompt({ command, failure, files, tree }) {
+  return [
+    "A command in this project failed. Change whatever it takes to make it pass.",
+    tree?.length ? `THE PROJECT\n\n${tree.join("\n")}` : null,
+    files.map(file => `=== FILE: ${file.path} ===\n${file.content}`).join("\n\n"),
+    `WHAT HAPPENED WHEN IT RAN\n\n${failure}`,
+    [
+      "Reply only with the edits you are making. Do not repeat a whole file and do",
+      "not explain anything. For each edit, name the file and give the exact text",
+      "to find and what to put in its place:",
+      "",
+      "=== FILE: path/to/file.js ===",
+      "<<<<<<< SEARCH",
+      "the exact text as it appears now, copied character for character",
+      "=======",
+      "what it should say instead",
+      ">>>>>>> REPLACE",
+      "",
+      "Include enough surrounding lines that the text you are finding appears",
+      "exactly once in the file. Give several edits if you need them, and only for",
+      `the files listed above. The command was: ${command}`
+    ].join("\n")
+  ].filter(Boolean).join("\n\n");
 }

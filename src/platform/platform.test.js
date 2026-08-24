@@ -646,3 +646,21 @@ test("A fix that already passes changes nothing", async () => {
     assert.equal(await readFile(join(workspacePath, "fine.js"), "utf8"), "process.exit(0);\n");
   });
 });
+
+// Found by repairing this project's own code: one rewrite introduced a syntax
+// error, and the next attempt debugged that instead of the real bug. Attempts
+// are independent tries at the same problem, never a chain.
+test("A rewrite that makes things worse does not poison the next attempt", async () => {
+  await serving(async (base, { workspacePath }) => {
+    const original = "process.exit(1);\n";
+    await writeFile(join(workspacePath, "target.js"), original, "utf8");
+
+    const value = await postJson(`${base}/api/fix`, {
+      paths: ["target.js"], command: "node target.js", attempts: 3
+    }).then(response => response.json());
+
+    assert.equal(value.fixed, false);
+    assert.equal(await readFile(join(workspacePath, "target.js"), "utf8"), original,
+      "the file it started from is the file it ends with");
+  });
+});

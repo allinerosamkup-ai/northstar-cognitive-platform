@@ -10,7 +10,7 @@ import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExis
 import { Settings } from "./settings.js";
 import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
 import { createGit, branchName, GitRejectedError, NotARepositoryError } from "./git.js";
-import { filesInFailure, parseChanges, repairPrompt, relatedFiles } from "../core/failure.js";
+import { filesInFailure, relatedFiles, editPrompt, parseEdits, applyEdits, EditNotApplicableError } from "../core/failure.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
@@ -332,43 +332,80 @@ ${result.stdout}`, { known: tree });
             break;
           }
 
-          let changes;
+          let edits;
           try {
             const output = await author.provider.work({
               taskId: `fix:${command}`,
               projectVersion: (await brain.getState(project.id)).version,
               kind: "repair", files: shown, failure: failureReport(result),
-              prompt: repairPrompt({ command, failure: failureReport(result), files: shown, tree })
+              prompt: editPrompt({ command, failure: failureReport(result), files: shown, tree })
             });
-            changes = parseChanges(output.text, { allowed: shown.map(file => file.path) });
+            edits = parseEdits(output.text, { allowed: shown.map(file => file.path) });
           } catch (error) {
             attempts.push({ attempt: attempts.length + 1, failed: error.message });
             break;
           }
 
-          const real = changes.filter(change =>
-            change.content.trim() !== shown.find(file => file.path === change.path)?.content.trim());
-          if (!real.length) {
-            attempts.push({ attempt: attempts.length + 1, unchanged: true });
+          if (!edits.length) {
+            attempts.push({ attempt: attempts.length + 1, noEdits: true });
             break;
           }
 
-          for (const change of real) {
-            await remember(change.path);
-            await workspace.write(change.path, change.content, { overwrite: true });
+          // Applied by exact match. An edit that matches nothing, or matches
+          // twice, is refused rather than guessed at — a wrong guess corrupts
+          // the file quietly, which is worse than an attempt that achieved
+          // nothing.
+          const written = [];
+          let refused = null;
+          for (const path of new Set(edits.map(edit => edit.path))) {
+            const before = shown.find(file => file.path === path)?.content;
+            if (before === undefined) continue;
+            try {
+              const next = applyEdits(before, edits.filter(edit => edit.path === path));
+              if (next === before) continue;
+              await remember(path);
+              await workspace.write(path, next, { overwrite: true });
+              written.push(path);
+            } catch (error) {
+              if (!(error instanceof EditNotApplicableError)) throw error;
+              refused = error.message;
+            }
           }
+
+          if (!written.length) {
+            attempts.push({ attempt: attempts.length + 1, ...(refused ? { refused } : { unchanged: true }) });
+            if (refused && attempts.length < limit) continue;
+            break;
+          }
+
           await mesh.publish(project.id, {
             type: "file.written", actorId: author.id,
-            payload: { paths: real.map(change => change.path), instruction: `fixing: ${command}` }
+            payload: { paths: written, instruction: `fixing: ${command}` }
           });
 
-          result = await run(command);
+          const after = await run(command);
           attempts.push({
             attempt: attempts.length + 1,
-            changed: real.map(change => change.path),
-            ok: result.ok,
-            exitCode: result.exitCode
+            changed: written,
+            ok: after.ok,
+            exitCode: after.exitCode
           });
+
+          if (after.ok) {
+            result = after;
+            break;
+          }
+
+          // Each attempt starts from where the repair began, never from the last
+          // failed one. A rewrite that breaks the file replaces a real failure
+          // with its own, and the next attempt would debug the damage instead of
+          // the bug — three tries spent on a problem that did not exist.
+          for (const path of written) {
+            const before = original.get(path);
+            if (before !== null && before !== undefined) {
+              await workspace.write(path, before, { overwrite: true });
+            }
+          }
         }
 
         const reverted = [];

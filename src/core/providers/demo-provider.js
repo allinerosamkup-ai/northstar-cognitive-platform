@@ -21,15 +21,11 @@ export class DemoProvider {
 
   async work(request) {
     if (request.kind === "build") return { text: this.#document(request) };
-    // A stand-in cannot repair code, one file or a project's worth. Returning
-    // every file exactly as it is says so truthfully, and ends a fix loop at once
-    // instead of spending attempts on an answer that was never going to change.
+    // A stand-in cannot repair anything, so it proposes no edits. Saying that
+    // plainly ends a fix loop at once, instead of spending attempts on an answer
+    // that was never going to change.
     if (request.kind === "repair") {
-      return {
-        text: (request.files ?? [])
-          .map(file => `=== FILE: ${file.path} ===\n${file.content}`)
-          .join("\n\n")
-      };
+      return { text: "No edits: a language model is needed to repair this. Add an API key in Settings." };
     }
     if (request.kind === "file") {
       return { text: request.existing ?? "// A language model is needed to write this file. Add an API key in Settings.\n" };

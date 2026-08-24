@@ -293,7 +293,10 @@ const COMMANDS = {
     if (options.json) return out(value);
 
     for (const attempt of value.attempts) {
-      if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: ${value.by} returned the files unchanged, so it stopped`);
+      if (attempt.refused) console.log(`  attempt ${attempt.attempt}: the edit did not match the file — ${attempt.refused}`);
+      else if (attempt.noEdits) console.log(`  attempt ${attempt.attempt}: ${value.by} proposed no edits, so it stopped`);
+      else if (attempt.truncated) console.log(`  attempt ${attempt.attempt}: ${value.by} sent back only part of ${attempt.truncated.join(", ")}, so it was refused`);
+      else if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: ${value.by} returned the files unchanged, so it stopped`);
       else if (attempt.noFilesFound) console.log(`  attempt ${attempt.attempt}: the failure named no file in this project — say which to change`);
       else if (attempt.failed) console.log(`  attempt ${attempt.attempt}: ${value.by} could not answer \u2014 ${attempt.failed}`);
       else console.log(`  attempt ${attempt.attempt}: changed ${attempt.changed.join(", ")} \u2014 ${attempt.ok ? "passed" : `still failing (exit ${attempt.exitCode})`}`);
