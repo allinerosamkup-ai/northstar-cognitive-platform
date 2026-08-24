@@ -548,3 +548,74 @@ test("Saving an edit nobody touched goes through", async () => {
     assert.equal(saved.status, 201);
   });
 });
+
+test("A command runs in the workspace and its result is recorded", async () => {
+  await serving(async base => {
+    const { result, snapshot } = await postJson(`${base}/api/run`, { command: 'node -e "console.log(7)"' })
+      .then(response => response.json());
+    assert.equal(result.ok, true);
+    assert.match(result.stdout, /7/);
+    assert.ok(snapshot.events.some(event => event.type === "command.run"));
+  });
+});
+
+test("A failing command reports its exit code rather than an error", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/run`, { command: 'node -e "process.exit(4)"' });
+    assert.equal(response.status, 200, "a failed command is an answer, not a server error");
+    assert.equal((await response.json()).result.exitCode, 4);
+  });
+});
+
+// The allowlist is the boundary. A model can rewrite a file and read an error;
+// it can never choose what executes.
+test("A command outside the allowed list is refused", async () => {
+  await serving(async base => {
+    for (const command of ["curl https://example.com", "./npm test", "/bin/sh"]) {
+      const response = await postJson(`${base}/api/run`, { command });
+      assert.equal(response.status, 400, command);
+    }
+  });
+});
+
+test("Nothing after a semicolon runs", async () => {
+  await serving(async base => {
+    const { result } = await postJson(`${base}/api/run`, {
+      command: 'node -e "0" ; node -e "console.log(\'ESCAPED\')"'
+    }).then(response => response.json());
+    assert.doesNotMatch(result.stdout, /ESCAPED/);
+  });
+});
+
+test("A fix needs both a file and a command", async () => {
+  await serving(async base => {
+    assert.equal((await postJson(`${base}/api/fix`, { command: "npm test" })).status, 400);
+    assert.equal((await postJson(`${base}/api/fix`, { path: "a.js" })).status, 400);
+  });
+});
+
+// In demo mode the resident cannot actually repair anything, so the loop must
+// notice it is going nowhere instead of spending attempts.
+test("A fix stops when the file comes back unchanged", async () => {
+  await serving(async (base, { workspacePath }) => {
+    await writeFile(join(workspacePath, "broken.js"), "process.exit(1);\n", "utf8");
+    const value = await postJson(`${base}/api/fix`, {
+      path: "broken.js", command: "node broken.js", attempts: 5
+    }).then(response => response.json());
+
+    assert.equal(value.fixed, false);
+    assert.ok(value.attempts.length <= 2, "it must not keep paying for the same answer");
+  });
+});
+
+test("A fix that already passes changes nothing", async () => {
+  await serving(async (base, { workspacePath }) => {
+    await writeFile(join(workspacePath, "fine.js"), "process.exit(0);\n", "utf8");
+    const value = await postJson(`${base}/api/fix`, { path: "fine.js", command: "node fine.js" })
+      .then(response => response.json());
+
+    assert.equal(value.fixed, true);
+    assert.deepEqual(value.attempts, [], "nothing was rewritten");
+    assert.equal(await readFile(join(workspacePath, "fine.js"), "utf8"), "process.exit(0);\n");
+  });
+});

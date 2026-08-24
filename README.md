@@ -81,6 +81,7 @@ Want real OpenAI/Anthropic/Gemini calls instead of canned text? See
 - Every conclusion is a proposal — the person running the project decides
 - A living project document the intelligences build and revise together
 - Writes real files to disk from what they build
+- Runs your commands and repairs a file until they pass
 - API keys configured in the app, stored locally, testable before you spend
 
 ## CLI
@@ -148,6 +149,28 @@ npm run cli -- confirm-division
 A session is the most expensive thing the app does — two provider calls per
 participant plus one for the conclusion — so the cost is shown before you
 start one, in the interface and in the CLI.
+
+## Running and repairing
+
+Writing a file is half of it. The other half is running something and reading
+what broke.
+
+```sh
+npm run cli -- run "npm test"
+npm run cli -- fix src/total.js -- npm test
+```
+
+`fix` runs the command, and while it fails it sends the failure and the file to
+a resident, writes back what comes out, and runs it again — up to three times by
+default (`--attempts`). It stops early if the file comes back unchanged, because
+the same answer will not pass the second time either.
+
+**The command is always yours.** A resident can read a failure and rewrite a
+file; it can never choose what executes. Only programs on an allowlist start
+(`npm`, `node`, `python`, `go`, `cargo`, … — narrow it with
+`COGNITIVE_ALLOWED_COMMANDS`), they are matched by name so a path cannot
+substitute one, nothing runs through a shell so a semicolon is an argument and
+not a second command, and a run that will not end is stopped after two minutes.
 
 ## Building something
 

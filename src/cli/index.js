@@ -21,6 +21,10 @@ WORKING SESSIONS
   confirm-division                Approve the proposed split
   cost                            What a session costs in provider calls
 
+RUNNING
+  run <command>                   Run a command in the workspace
+  fix <file> -- <command>         Run it; when it fails, the file is rewritten until it passes
+
 BUILDING
   build <instruction>             Produce the next revision of the project document
   document                        Print the current document
@@ -48,7 +52,8 @@ PROVIDERS
 OPTIONS
   --topology <name>               solo | distributed | joint | composite (default: composite)
   --with <ids>                    Comma-separated residents, e.g. --with gpt,claude
-  --by <id>                       Which resident writes the conclusion or the split
+  --by <id>                       Which resident writes the conclusion, split or fix
+  --attempts <n>                  How many times a fix may retry (default 3, max 6)
   --json                          Machine-readable output for scripts
 
   Set COGNITIVE_API_URL to reach a server on another port or host.
@@ -64,6 +69,7 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
+  else if (argument === "--attempts") options.attempts = Number(argv[++index]);
   else if (argument === "--by") options.by = options.synthesisBy = options.dividedBy = argv[++index];
   else positional.push(argument);
 }
@@ -202,6 +208,40 @@ const COMMANDS = {
     console.log(`\n${value.revision.markdown}\n`);
     console.log(`Revision ${value.revision.version} · built by ${value.revision.contributors.join(", ")}`);
     if (value.files.length) console.log(`Proposed files: ${value.files.map(file => file.path).join(", ")}`);
+  },
+
+  async run() {
+    const { result } = await client.runCommand(requireText(joined, "A command"));
+    if (options.json) return out(result);
+    if (result.stdout.trim()) console.log(result.stdout.trimEnd());
+    if (result.stderr.trim()) console.error(result.stderr.trimEnd());
+    if (result.failure) console.error(result.failure);
+    console.log(result.ok
+      ? `\npassed in ${Math.round(result.durationMs / 100) / 10}s`
+      : `\nfailed: ${result.timedOut ? "it was still running at the time limit" : `exit code ${result.exitCode}`}`);
+    if (!result.ok) process.exitCode = 1;
+  },
+
+  async fix() {
+    const separator = rest.indexOf("--");
+    if (separator < 1) throw new Error(`Use: fix <file> -- <command>   for example: fix app/lista.js -- npm test`);
+    const path = rest.slice(0, separator).join(" ");
+    const command = rest.slice(separator + 1).join(" ");
+    requireText(command, "A command to run");
+
+    const value = await client.fix(path, command, options.attempts, options.by);
+    if (options.json) return out(value);
+    for (const attempt of value.attempts) {
+      if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: ${value.by} returned the file unchanged, so it stopped`);
+      else if (attempt.failed) console.log(`  attempt ${attempt.attempt}: ${value.by} could not answer — ${attempt.failed}`);
+      else console.log(`  attempt ${attempt.attempt}: ${attempt.ok ? "passed" : `still failing (exit ${attempt.exitCode})`}`);
+    }
+    if (value.fixed) console.log(`\n${path} passes "${command}" now.`);
+    else {
+      console.log(`\nStill failing after ${value.attempts.length} ${value.attempts.length === 1 ? "attempt" : "attempts"}. The last error:\n`);
+      console.log((value.result.stderr || value.result.stdout || value.result.failure || "").trim().slice(-1200));
+      process.exitCode = 1;
+    }
   },
 
   async make() {

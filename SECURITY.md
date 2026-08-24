@@ -40,6 +40,27 @@ their content into the project brain.
   enabled it is sent to the model provider you configured. Do not attach
   secrets.
 
+## A note on running commands
+
+`POST /api/run` and `POST /api/fix` execute programs on your machine, in the
+workspace folder. That is the most dangerous thing this app can do, and four
+rules contain it:
+
+- The command comes from you. A model can read a failure and rewrite a file; it
+  never chooses what runs.
+- Only programs on the allowlist start. Set `COGNITIVE_ALLOWED_COMMANDS` to
+  narrow it further for a project.
+- A program is matched by name, never by path, so `./npm` cannot stand in for
+  `npm`.
+- Nothing runs through a shell, so `;` and `|` are ordinary characters in an
+  argument rather than a way to start a second command. On Windows a `.cmd` file
+  forces `cmd.exe` into the picture; arguments are quoted and their own quotes
+  doubled so nothing is reinterpreted.
+
+Runs are stopped after two minutes. These boundaries have tests in
+`src/platform/runner.test.js` that prove the property rather than assert the
+rule — treat a change there as security-relevant.
+
 ## Scope
 
 Northstar is a prototype with no authentication, no multi-tenancy, and no

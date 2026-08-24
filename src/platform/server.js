@@ -8,6 +8,7 @@ import { createResidentProviders } from "../core/providers/provider-factory.js";
 import { ContinuityManager } from "../core/continuity.js";
 import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExistsError } from "./files.js";
 import { Settings } from "./settings.js";
+import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
@@ -63,6 +64,9 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
   const continuity = new ContinuityManager(mesh, brain);
   const session = new WorkingSession(mesh, brain);
   const workspace = new Workspace(workspacePath);
+  const allowedCommands = (settings.values.COGNITIVE_ALLOWED_COMMANDS ?? "")
+    .split(",").map(name => name.trim()).filter(Boolean);
+  const run = createRunner({ cwd: workspacePath, allowed: allowedCommands.length ? allowedCommands : DEFAULT_ALLOWED });
   let server;
   const snapshot = async () => ({
     project,
@@ -213,6 +217,80 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       if (request.method === "GET" && url.pathname === "/api/session/cost") {
         return json(response, 200, sessionCost());
       }
+      if (request.method === "POST" && url.pathname === "/api/run") {
+        const input = await body(request);
+        const result = await run(String(input.command ?? ""));
+        await mesh.publish(project.id, {
+          type: "command.run", actorId: "user",
+          payload: { command: result.command, ok: result.ok, exitCode: result.exitCode, timedOut: result.timedOut }
+        });
+        return json(response, 200, { result, snapshot: await snapshot() });
+      }
+      // Write, run, read the error, rewrite, run again. The command is always
+      // the person's — a model can see what broke and change the file, but it
+      // never chooses what executes.
+      if (request.method === "POST" && url.pathname === "/api/fix") {
+        const input = await body(request);
+        if (!input.path) return json(response, 400, { error: "A file path is required" });
+        if (!input.command?.trim()) return json(response, 400, { error: "A command to run is required" });
+
+        const author = input.by
+          ? mesh.resident(project.id, input.by)
+          : mesh.residents(project.id).find(resident => resident.provider.apiKey) ?? mesh.residents(project.id)[0];
+        if (!author) return json(response, 400, { error: "No resident is available to fix it" });
+
+        const limit = Math.min(Math.max(Number(input.attempts ?? 3), 1), 6);
+        const attempts = [];
+        let result = await run(input.command.trim());
+
+        while (!result.ok && attempts.length < limit) {
+          const current = await workspace.read(input.path).then(file => file.content).catch(() => null);
+          if (current === null) break;
+
+          const state = await brain.getState(project.id);
+          let rewritten;
+          try {
+            const output = await author.provider.work({
+              taskId: `fix:${input.path}`,
+              projectVersion: state.version,
+              kind: "file", existing: current,
+              prompt: filePrompt({
+                path: input.path,
+                existing: current,
+                instruction: `Running this command failed. Fix the file so it passes.
+
+${failureReport(result)}`,
+                attachments: []
+              })
+            });
+            rewritten = fileFromReply(output.text, input.path);
+          } catch (error) {
+            attempts.push({ attempt: attempts.length + 1, failed: error.message });
+            break;
+          }
+
+          // A model that returns the file unchanged will return it unchanged
+          // again; another round would only cost money.
+          if (rewritten.trim() === current.trim()) {
+            attempts.push({ attempt: attempts.length + 1, unchanged: true });
+            break;
+          }
+
+          const written = await workspace.write(input.path, rewritten, { overwrite: true });
+          await mesh.publish(project.id, {
+            type: "file.written", actorId: author.id,
+            payload: { ...written, instruction: `fixing: ${input.command.trim()}` }
+          });
+          result = await run(input.command.trim());
+          attempts.push({ attempt: attempts.length + 1, ok: result.ok, exitCode: result.exitCode });
+        }
+
+        await mesh.publish(project.id, {
+          type: "command.run", actorId: author.id,
+          payload: { command: result.command, ok: result.ok, exitCode: result.exitCode, attempts: attempts.length }
+        });
+        return json(response, 200, { fixed: result.ok, attempts, result, by: author.id, snapshot: await snapshot() });
+      }
       // Producing one working file, where the contract is explicit: the reply is
       // the file. Asking for a document and hoping a file falls out of it does
       // not survive contact with how differently models format things.
@@ -231,6 +309,7 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
         const output = await author.provider.work({
           taskId: `generate:${input.path}`,
           projectVersion: state.version,
+          kind: "file", existing,
           prompt: filePrompt({
             path: input.path,
             instruction: input.instruction.trim(),
@@ -365,6 +444,7 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
       }
       json(response, 404, { error: "Not found" });
     } catch (error) {
+      if (error instanceof CommandRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof AgentRejectedError) return json(response, 400, { error: error.message });
       if (error instanceof PathOutsideWorkspaceError) return json(response, 403, { error: "That path is outside the workspace" });
       if (error instanceof FileExistsError) return json(response, 409, { error: error.message, path: error.path });

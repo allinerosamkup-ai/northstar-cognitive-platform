@@ -12,3 +12,6 @@ documents/
 
 # Apps the residents build and you chose to keep
 app/
+
+# Scratch files from trying the fix loop
+demo/
