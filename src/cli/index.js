@@ -34,7 +34,7 @@ RUNNING
   fix <files> -- <command>        The same, but you say which files may change
 
 BUILDING SOFTWARE
-  create <what to build>          Plan the parts, write them all, run it, fix it until it passes
+  create <what to build>          Work out what done means, build it, run it, and keep going until it does all of it
 
 BUILDING
   build <instruction>             Produce the next revision of the project document
@@ -81,6 +81,7 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
+  else if (argument === "--rounds") options.rounds = Number(argv[++index]);
   else if (argument === "--verify") options.verify = argv[++index];
   else if (argument === "--name") options.name = argv[++index];
   else if (argument === "--staged") options.staged = true;
@@ -321,47 +322,99 @@ const COMMANDS = {
   // The whole point: not a file, a working system. Plan, write every part so
   // they agree with each other, run the command that proves it, and repair until
   // it passes — because a build nobody ran is not a build that works.
+  // Not a file, a working system — and not finished because a command exited
+  // zero. What "done" means is decided from the request first, and the build
+  // keeps going until the code does all of it or it runs out of rounds.
   async create() {
     const description = requireText(joined, "A description of what to build");
 
-    console.log("Planning the parts…");
-    const value = await client.project(description, options.by);
+    console.log("Working out what done means, and planning the parts…");
+    const value = await client.project(description, options.by, options.rounds);
     if (options.json) return out(value);
+
+    if (value.requirements.length) {
+      console.log(`\nWhat this has to do:`);
+      for (const requirement of value.requirements) console.log(`  - ${requirement}`);
+    }
 
     console.log(`\n${value.plan.files.length} files planned:`);
     for (const file of value.plan.files) console.log(`  ${file.path.padEnd(34)} ${file.purpose}`);
-    if (value.plan.notes) console.log(`\nWhat they must agree on:\n${value.plan.notes.split("\n").map(line => `  ${line}`).join("\n")}`);
 
     console.log(`\nWritten:`);
     for (const file of value.written) console.log(`  ${file.path.padEnd(34)} ${file.size} bytes`);
-    for (const failure of value.failed) console.log(`  ${failure.path.padEnd(34)} failed — ${failure.error}`);
+    for (const failure of value.failed) console.log(`  ${failure.path.padEnd(34)} failed \u2014 ${failure.error}`);
+
+    for (const pass of value.passes) {
+      console.log(`\nRound ${pass.round}: ${pass.met} of ${pass.of} requirements met`);
+      for (const missing of pass.unmet) console.log(`  still missing: ${missing}`);
+    }
 
     const command = options.verify ?? value.plan.verify;
-    if (!command) {
-      console.log(`\nNothing to run: the plan named no command that proves it works.`);
-      console.log(`Give one with --verify "<command>" to have it checked and repaired.`);
-      process.exitCode = 1;
+    let runs = null;
+
+    if (command) {
+      console.log(`\nRunning "${command}"\u2026`);
+      const repaired = await client.fix([], command, options.attempts, options.by);
+      for (const attempt of repaired.attempts) {
+        if (attempt.refused) console.log(`  attempt ${attempt.attempt}: the edit did not match \u2014 ${attempt.refused}`);
+        else if (attempt.noEdits) console.log(`  attempt ${attempt.attempt}: no edits proposed, so it stopped`);
+        else if (attempt.noFilesFound) console.log(`  attempt ${attempt.attempt}: the failure named no file in this project`);
+        else if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: nothing changed, so it stopped`);
+        else console.log(`  attempt ${attempt.attempt}: changed ${(attempt.changed ?? []).join(", ")} \u2014 ${attempt.ok ? "passed" : "still failing"}`);
+      }
+      runs = repaired.fixed;
+      if (!runs) {
+        console.log(`\n${(repaired.result.stderr || repaired.result.stdout || repaired.result.failure || "").trim().slice(-800)}`);
+      }
+    }
+
+    // Three separate facts, and "done" is the conjunction of all of them. A
+    // review that read the code said every requirement was met while every
+    // reservation silently vanished — so what the running check says outranks
+    // what anyone read.
+    if (value.acceptance?.length) {
+      console.log(`\nUsing it the way a caller would:`);
+      for (const item of value.acceptance) {
+        console.log(`  ${item.passed ? "works " : "BROKEN"} ${item.requirement}${item.note ? ` \u2014 ${item.note}` : ""}`);
+      }
+    }
+
+    const built = value.satisfied === true;
+    const works = value.works;
+    console.log("");
+
+    if (built && works === true && runs !== false) {
+      console.log(`Done. Everything asked for is there, and using it as a caller would, it does all of it.`);
+      if (value.acceptanceCheck) console.log(`The check that proves it is in ${value.acceptanceCheck.path}.`);
       return;
     }
 
-    console.log(`\nRunning "${command}"…`);
-    const repaired = await client.fix([], command, options.attempts, options.by);
-    for (const attempt of repaired.attempts) {
-      if (attempt.refused) console.log(`  attempt ${attempt.attempt}: the edit did not match — ${attempt.refused}`);
-      else if (attempt.noEdits) console.log(`  attempt ${attempt.attempt}: no edits proposed, so it stopped`);
-      else if (attempt.noFilesFound) console.log(`  attempt ${attempt.attempt}: the failure named no file in this project`);
-      else if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: nothing changed, so it stopped`);
-      else console.log(`  attempt ${attempt.attempt}: changed ${(attempt.changed ?? []).join(", ")} \u2014 ${attempt.ok ? "passed" : "still failing"}`);
+    process.exitCode = 1;
+
+    if (works === false) {
+      console.log(`It does not work yet. These failed when the software was actually used:`);
+      for (const item of value.acceptance.filter(entry => !entry.passed)) {
+        console.log(`  ${item.requirement}${item.note ? ` \u2014 ${item.note}` : ""}`);
+      }
+      if (built) console.log(`\nThe code contains all of it and does not behave correctly \u2014 the tests it wrote for itself pass anyway.`);
+    } else if (works === null) {
+      console.log(`Nothing was checked by using it, so nothing is proven to work.`);
+      if (value.satisfied === false) {
+        console.log(`Reading the code, these were missing:`);
+        for (const item of value.review.filter(entry => entry.verdict !== "MET")) {
+          console.log(`  ${item.verdict.padEnd(9)} ${item.requirement}`);
+        }
+      }
+    } else if (!built) {
+      console.log(`It behaves correctly, but reading the code these were not found:`);
+      for (const item of value.review.filter(entry => entry.verdict !== "MET")) {
+        console.log(`  ${item.verdict.padEnd(9)} ${item.requirement}`);
+      }
     }
 
-    if (repaired.fixed) {
-      console.log(`\nIt works. "${command}" passes.`);
-    } else {
-      console.log(`\nIt does not work yet. "${command}" still fails:\n`);
-      console.log((repaired.result.stderr || repaired.result.stdout || repaired.result.failure || "").trim().slice(-1200));
-      console.log(`\nThe files are on disk to look at. Run "fix -- ${command}" to try again.`);
-      process.exitCode = 1;
-    }
+    if (runs === false) console.log(`\nIts own tests do not pass either: "${command}" fails.`);
+
+    console.log(`\nThe files are on disk. "create ... --rounds 5" gives it more passes at what is missing.`);
   },
 
   async make() {

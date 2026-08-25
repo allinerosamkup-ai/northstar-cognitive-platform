@@ -79,6 +79,30 @@ function firstCommand(block) {
 // Each file is written knowing the whole plan and everything written before it.
 // That is what makes the imports resolve and the names line up: not luck, and
 // not a model remembering across separate requests it never sees together.
+// A model writing a test guesses at the framework, and guesses wrong: asked for
+// node --test it reached for `expect`, which node:test does not export, turning
+// a working suite into a module that will not load. Naming what the runner
+// actually provides costs one line and removes the whole class of mistake.
+const RUNNERS = [
+  {
+    match: /node\s+--test/,
+    note: [
+      "Tests run with `node --test`. Import what you use from 'node:test' —",
+      "`test`, and `describe`/`it` if you prefer them. There is no `expect`:",
+      "assertions come from 'node:assert/strict'."
+    ].join(" ")
+  },
+  { match: /vitest/, note: "Tests run with vitest. Import `describe`, `it` and `expect` from 'vitest'." },
+  { match: /jest/, note: "Tests run with jest. `describe`, `it` and `expect` are global; do not import them." },
+  { match: /pytest/, note: "Tests run with pytest. Use plain `assert` and name test functions `test_*`." },
+  { match: /go\s+test/, note: "Tests run with `go test`. Use the standard `testing` package." },
+  { match: /cargo\s+test/, note: "Tests run with `cargo test`. Use `#[test]` and the standard assert macros." }
+];
+
+export function runnerNote(command) {
+  return RUNNERS.find(runner => runner.match.test(String(command ?? "")))?.note ?? null;
+}
+
 export function partPrompt({ description, plan, path, purpose, written = [] }) {
   return [
     `You are writing one file of a larger project. Write ${path} and nothing else.`,
@@ -89,6 +113,7 @@ export function partPrompt({ description, plan, path, purpose, written = [] }) {
       ? `FILES ALREADY WRITTEN — match these exactly: their export names, their paths, the shape of what they return\n\n${written.map(file => `=== ${file.path} ===\n${file.content}`).join("\n\n")}`
       : null,
     `THIS FILE\n\n${path} — ${purpose}`,
+    runnerNote(plan.verify),
     [
       "Output the file and nothing else: no explanation before it, no summary",
       "after it, no markdown fence around it. The first character of your reply is",

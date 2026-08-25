@@ -134,14 +134,23 @@ test("A failure report gives a model the command and the error", () => {
   assert.match(report, /3 passing/);
 });
 
-// The end of the output is where the stack trace and the real error are.
-test("A long failure report keeps the end, not the beginning", () => {
+// An assertion puts the useful part at the end; a module that failed to load
+// puts it at the start and fills the rest with runtime internals. Keeping one
+// end loses whichever kind this was.
+test("A long failure report keeps both ends of the output", () => {
   const report = failureReport({
     command: "npm test", exitCode: 1,
-    stderr: `${"noise\n".repeat(4000)}THE REAL ERROR`
-  }, 200);
-  assert.match(report, /THE REAL ERROR/);
-  assert.ok(report.length < 1500, "and it stays small enough to send");
+    stderr: [
+      "ReferenceError: describe is not defined",
+      ...Array.from({ length: 2000 }, () => "at node:internal"),
+      "THE LAST LINE"
+    ].join("\n")
+  }, 400);
+
+  assert.match(report, /ReferenceError: describe is not defined/, "the error type survives");
+  assert.match(report, /THE LAST LINE/, "and so does the end of the trace");
+  assert.match(report, /characters omitted/, "with the middle accounted for");
+  assert.ok(report.length < 1200, "and it stays small enough to send");
 });
 
 test("A timeout is reported as a timeout, not as an exit code", () => {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filesInFailure, parseChanges, repairPrompt, importedBy, relatedFiles, looksTruncated, parseEdits, applyEdits, editPrompt } from "./failure.js";
+import { filesInFailure, parseChanges, repairPrompt, importedBy, relatedFiles, looksTruncated, parseEdits, applyEdits, editPrompt, manifestPaths } from "./failure.js";
 
 const PROJECT = ["src/total.js", "src/cart.js", "src/total.test.js", "index.js"];
 
@@ -297,4 +297,37 @@ test("An edit written the way the prompt describes is one the parser reads", () 
     .replace("the exact text as it appears now, copied character for character", "x")
     .replace("what it should say instead", "y");
   assert.deepEqual(parseEdits(reply, { allowed: ["a.js"] }), [{ path: "a.js", search: "x", replace: "y" }]);
+});
+
+// Found building a real project: asked to add a missing test import, the model
+// wrote `from 'your-testing-library'` — a plausible package that does not exist.
+// It could not tell what was available, because nothing showed it.
+test("The project manifest is found so a repair knows what it may import", () => {
+  assert.deepEqual(manifestPaths(["src/a.js", "package.json", "README.md"]), ["package.json"]);
+  assert.deepEqual(manifestPaths(["pyproject.toml", "go.mod"]), ["pyproject.toml", "go.mod"]);
+  assert.deepEqual(manifestPaths(["src/a.js"]), [], "a project without one offers none");
+  assert.deepEqual(manifestPaths([]), []);
+});
+
+// Found building a real project: the same wrong import was proposed three times
+// in a row, because each attempt started from the same input and had no way to
+// know the previous one had already tried exactly that.
+test("A repair is told which edits already failed, and what they produced", () => {
+  const prompt = editPrompt({
+    command: "npm test", failure: "boom", tree: [],
+    files: [{ path: "a.test.js", content: "x" }],
+    alreadyTried: [{
+      path: "a.test.js",
+      replace: "import { expect } from 'node:test';",
+      outcome: "SyntaxError: The requested module does not provide an export named 'expect'"
+    }]
+  });
+  assert.match(prompt, /do not repeat them/);
+  assert.match(prompt, /import \{ expect \} from 'node:test';/);
+  assert.match(prompt, /does not provide an export named 'expect'/);
+});
+
+test("A first attempt is not told about failures that have not happened", () => {
+  const prompt = editPrompt({ command: "npm test", failure: "boom", files: [{ path: "a.js", content: "x" }], tree: [] });
+  assert.doesNotMatch(prompt, /ALREADY TRIED/);
 });

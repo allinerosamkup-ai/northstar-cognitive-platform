@@ -59,8 +59,6 @@ Read this before deciding whether it fits your work.
 
 - **It is a prototype.** One project per instance, no authentication, no
   multi-tenancy, no secret management beyond a local `.env`.
-- **A build is one pass.** It plans, writes and repairs once. It does not come
-  back later, reconsider the plan, or notice that a requirement went unbuilt.
 - **Repair is bounded.** It follows imports from the failing file, up to eight
   files, and retries three times by default. A failure spread across a large
   codebase will exhaust that.
@@ -256,34 +254,37 @@ not a way to reach arbitrary git.
 ## Building software
 
 Writing one file is not building software. A system is several files that have
-to agree with each other — the names they export, the paths they import, the
-shape of what they pass around — and a file written in isolation agrees with
-nothing.
+to agree with each other, and it is not finished because a command exited zero.
 
 ```sh
-npm run cli -- create "a library lending system in plain JavaScript: add a book,
-  lend it to a person, return it, and refuse to lend one that is already out.
-  Include tests covering each rule."
+npm run cli -- create "a meeting room booking system: reserve a room for a
+  period, cancel, list a room's reservations. Refuse a booking that overlaps an
+  existing one, and refuse one whose end is before its start."
 ```
 
 What happens:
 
-1. **Plan.** What the files are, what each is responsible for, in the order they
-   should be written, and what command proves the whole thing works.
-2. **Write.** Each file is written knowing the plan and every file written before
-   it, so the imports resolve and the names line up. That is the mechanism for
-   coherence — not a model remembering across requests it never sees together.
-3. **Run.** The command from the plan, or your own with `--verify`.
-4. **Repair.** While it fails, the loop above runs, editing whatever files the
-   failure implicates.
+1. **Decide what done means.** The request becomes a list of things a person
+   could check, worked out before anything is built.
+2. **Plan.** What the files are, what each is responsible for, in what order, and
+   what command proves the whole thing works.
+3. **Write.** Each file is written knowing the plan and every file written before
+   it, so the imports resolve and the names line up.
+4. **Check by using it.** A separate script exercises each requirement through
+   the public interface — no test framework, no internal setup — and reports one
+   line per requirement. **This is what decides "done".**
+5. **Keep going.** While that check rejects something, the build comes back and
+   builds what is missing, up to `--rounds` passes.
 
-Nothing is finished because a model said so. If the command does not pass, it
-says so and leaves the files on disk to look at.
+Step 4 exists because of what happened without it. Asked for the booking system
+above, the first build wrote code whose own tests passed and whose review found
+all ten requirements met. The tests primed state through an internal function;
+without that call every reservation was silently dropped, so nothing was stored
+and no overlap was ever detected. Reading the code could not see it. Using the
+code found it immediately.
 
-Asked for the lending system above, it planned four files, wrote them, found a
-failure, and repaired it. The rules held under a test written separately from
-the ones it generated — including refusing to lend a book that does not exist,
-which nobody had asked it to handle.
+The check is left behind as `northstar-acceptance.mjs`, so you can read what was
+actually verified rather than take a word for it.
 
 ## Building one file
 

@@ -10,8 +10,16 @@ import { Workspace, PathOutsideWorkspaceError, AttachmentRejectedError, FileExis
 import { Settings } from "./settings.js";
 import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
 import { createGit, branchName, GitRejectedError, NotARepositoryError } from "./git.js";
-import { filesInFailure, relatedFiles, editPrompt, parseEdits, applyEdits, EditNotApplicableError } from "../core/failure.js";
+import { filesInFailure, relatedFiles, editPrompt, parseEdits, applyEdits, EditNotApplicableError, manifestPaths } from "../core/failure.js";
 import { planPrompt, parsePlan, partPrompt, buildCost } from "../core/blueprint.js";
+import {
+  requirementsPrompt, parseRequirements, reviewPrompt, parseReview,
+  isSatisfied, gapInstruction
+} from "../core/requirements.js";
+import {
+  acceptancePrompt, parseAcceptance, accepted, rejectedInstruction,
+  acceptancePath, acceptanceCommand
+} from "../core/acceptance.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
@@ -300,6 +308,8 @@ export async function createPlatformServer({ dataPath, port = 4310, workspacePat
         const limit = Math.min(Math.max(Number(input.attempts ?? 3), 1), 6);
         const tree = await workspace.tree();
         const attempts = [];
+        // Files reset between attempts; what was learned from them does not.
+        const alreadyTried = [];
 
         // Everything touched is remembered as it was. A run that ends still
         // failing leaves the project exactly as it was found, rather than
@@ -324,7 +334,9 @@ ${result.stdout}`, { known: tree });
           // A stack trace names the test, not the mistake, so what those files
           // import comes too — otherwise the only file on offer is the failing
           // assertion, and rewriting a test to accept wrong code is not a repair.
-          const shown = await relatedFiles(blamed, {
+          // The manifest goes first: without it a model cannot tell what it may
+          // import, and invents a package rather than using what is there.
+          const shown = await relatedFiles([...manifestPaths(tree), ...blamed], {
             known: tree,
             read: path => workspace.read(path).then(file => file.content).catch(() => null)
           });
@@ -339,7 +351,7 @@ ${result.stdout}`, { known: tree });
               taskId: `fix:${command}`,
               projectVersion: (await brain.getState(project.id)).version,
               kind: "repair", files: shown, failure: failureReport(result),
-              prompt: editPrompt({ command, failure: failureReport(result), files: shown, tree })
+              prompt: editPrompt({ command, failure: failureReport(result), files: shown, tree, alreadyTried })
             });
             edits = parseEdits(output.text, { allowed: shown.map(file => file.path) });
           } catch (error) {
@@ -385,6 +397,15 @@ ${result.stdout}`, { known: tree });
           });
 
           const after = await run(command);
+          if (!after.ok) {
+            for (const edit of edits.filter(item => written.includes(item.path))) {
+              alreadyTried.push({
+                path: edit.path,
+                replace: edit.replace.slice(0, 400),
+                outcome: (after.stderr || after.stdout || "").trim().slice(0, 300) || `exit code ${after.exitCode}`
+              });
+            }
+          }
           attempts.push({
             attempt: attempts.length + 1,
             changed: written,
@@ -446,10 +467,17 @@ ${result.stdout}`, { known: tree });
         if (!author) return json(response, 400, { error: "No resident is available to build it" });
 
         const description = input.description.trim();
+        const rounds = Math.min(Math.max(Number(input.rounds ?? 3), 1), 5);
         const version = () => brain.getState(project.id).then(state => state.version);
         const ask = async (prompt, kind) => (await author.provider.work({
           taskId: `project:${kind}`, projectVersion: await version(), prompt, kind, instruction: description
         })).text;
+
+        // What "done" means, decided before anything is built, so finishing is
+        // measured against the request rather than against a command exiting
+        // zero. A passing test proves that test passed; it proves nothing about
+        // whether what was asked for exists.
+        const requirements = parseRequirements(await ask(requirementsPrompt({ description }), "requirements"));
 
         const plan = parsePlan(await ask(planPrompt({ description, tree: await workspace.tree() }), "plan"));
         if (!plan.files.length) {
@@ -457,32 +485,125 @@ ${result.stdout}`, { known: tree });
         }
         await mesh.publish(project.id, {
           type: "project.planned", actorId: author.id,
-          payload: { description, files: plan.files, verify: plan.verify, notes: plan.notes }
+          payload: { description, requirements, files: plan.files, verify: plan.verify, notes: plan.notes }
         });
 
-        // Written in the planned order and carried forward, so a file that
-        // imports another was written after it and has seen it.
+        const read = path => workspace.read(path).then(file => file.content).catch(() => null);
         const written = [];
         const failures = [];
-        for (const file of plan.files) {
+
+        const writePart = async (file, extra) => {
           try {
-            const content = fileFromReply(
-              await ask(partPrompt({ description, plan, path: file.path, purpose: file.purpose, written }), "file"),
-              file.path
-            );
+            const existing = await read(file.path);
+            const content = fileFromReply(await ask([
+              partPrompt({ description, plan, path: file.path, purpose: file.purpose, written }),
+              existing ? `THIS FILE ALREADY EXISTS. Keep what works and add what is asked:\n\n${existing}` : null,
+              extra
+            ].filter(Boolean).join("\n\n"), "file"), file.path);
             const result = await workspace.write(file.path, content, { overwrite: true });
-            written.push({ path: file.path, content, size: result.size });
+            const already = written.findIndex(part => part.path === file.path);
+            const record = { path: file.path, content, size: result.size };
+            if (already >= 0) written[already] = record; else written.push(record);
+            return true;
           } catch (error) {
             failures.push({ path: file.path, error: error.message });
+            return false;
+          }
+        };
+
+        for (const file of plan.files) await writePart(file);
+
+        // Building until it is done, rather than until one pass ends. Each round
+        // asks what is still missing and builds only that; a round that finds
+        // nothing new to do stops, because another would cost money to repeat
+        // itself.
+        const passes = [];
+        const attempts_acceptance = [];
+        let review = [];
+        for (let round = 1; round <= rounds; round += 1) {
+          if (!requirements.length) break;
+          review = parseReview(await ask(reviewPrompt({ requirements, files: written }), "review"), requirements);
+          const gap = gapInstruction(review);
+          passes.push({
+            round,
+            met: review.filter(item => item.verdict === "MET").length,
+            of: requirements.length,
+            unmet: review.filter(item => item.verdict !== "MET").map(item => item.requirement)
+          });
+          if (!gap || round === rounds) break;
+
+          // Everything is offered again: a missing requirement usually belongs in
+          // a file that already exists, and the tests have to grow with it.
+          let changed = false;
+          for (const file of plan.files) changed = (await writePart(file, gap)) || changed;
+          if (!changed) break;
+        }
+
+        // The code's own tests pass for reasons the code does not deserve: a
+        // generated suite primed state through an internal function, and without
+        // that call nothing was ever stored. So what decides "done" is a separate
+        // check that uses the software the way a caller would, and it is run, not
+        // read.
+        let acceptance = [];
+        let acceptanceRun = null;
+        const checkPath = acceptancePath();
+
+        const checkItWorks = async () => {
+          try {
+            const script = fileFromReply(await ask(acceptancePrompt({
+              description, requirements, files: written, entryHint: "an ES module run by node"
+            }), "acceptance"), checkPath);
+            if (!script.trim()) return;
+            await workspace.write(checkPath, script, { overwrite: true });
+            acceptanceRun = await run(acceptanceCommand(checkPath));
+            acceptance = parseAcceptance(`${acceptanceRun.stdout}
+${acceptanceRun.stderr}`, requirements);
+          } catch (error) {
+            acceptanceRun = { ok: false, failure: error.message, stdout: "", stderr: "" };
+          }
+        };
+
+        // Reading the code said every requirement was met while a reservation
+        // silently vanished on every call. So the build keeps going on what the
+        // running check says, not on what the review saw.
+        if (requirements.length && written.length) {
+          for (let round = 1; round <= rounds; round += 1) {
+            await checkItWorks();
+            const rejected = rejectedInstruction(acceptance);
+            attempts_acceptance.push({
+              round,
+              passed: acceptance.filter(item => item.passed).length,
+              of: requirements.length,
+              failing: acceptance.filter(item => !item.passed).map(item => item.requirement)
+            });
+            if (!rejected || round === rounds) break;
+            for (const file of plan.files) await writePart(file, rejected);
           }
         }
+
         await mesh.publish(project.id, {
           type: "project.built", actorId: author.id,
-          payload: { description, written: written.map(file => file.path), failed: failures }
+          payload: {
+            description,
+            requirements,
+            written: written.map(file => file.path),
+            failed: failures,
+            satisfied: requirements.length ? isSatisfied(review) : null,
+            works: requirements.length ? accepted(acceptance) : null,
+            rounds: passes.length
+          }
         });
 
         return json(response, 201, {
           plan,
+          requirements,
+          review,
+          satisfied: requirements.length ? isSatisfied(review) : null,
+          acceptance,
+          acceptanceRounds: attempts_acceptance,
+          works: requirements.length ? accepted(acceptance) : null,
+          acceptanceCheck: acceptanceRun ? { path: acceptancePath(), ok: acceptanceRun.ok } : null,
+          passes,
           written: written.map(file => ({ path: file.path, size: file.size })),
           failed: failures,
           cost: buildCost(plan.files.length),

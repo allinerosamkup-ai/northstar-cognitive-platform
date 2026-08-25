@@ -215,10 +215,18 @@ export function applyEdits(content, edits) {
   return next;
 }
 
-export function editPrompt({ command, failure, files, tree }) {
+export function editPrompt({ command, failure, files, tree, alreadyTried = [] }) {
   return [
     "A command in this project failed. Change whatever it takes to make it pass.",
     tree?.length ? `THE PROJECT\n\n${tree.join("\n")}` : null,
+    // Files go back to how they were between attempts, but what was learned does
+    // not. Without this the same wrong edit gets proposed again, word for word,
+    // until the attempts run out.
+    alreadyTried.length
+      ? `EDITS ALREADY TRIED, WHICH DID NOT WORK — do not repeat them\n\n${alreadyTried
+          .map((tried, index) => `${index + 1}. In ${tried.path}, replacing with:\n${tried.replace}\n\nThat produced:\n${tried.outcome}`)
+          .join("\n\n")}`
+      : null,
     files.map(file => `=== FILE: ${file.path} ===\n${file.content}`).join("\n\n"),
     `WHAT HAPPENED WHEN IT RAN\n\n${failure}`,
     [
@@ -238,4 +246,14 @@ export function editPrompt({ command, failure, files, tree }) {
       `the files listed above. The command was: ${command}`
     ].join("\n")
   ].filter(Boolean).join("\n\n");
+}
+
+// A model repairing a file cannot tell what it is allowed to import. Left to
+// guess it invents a plausible library — "your-testing-library" — and turns a
+// missing import into a missing package. The manifest is what says which
+// dependencies exist, so it travels with every repair.
+const MANIFESTS = ["package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "deno.json"];
+
+export function manifestPaths(tree = []) {
+  return MANIFESTS.filter(name => tree.includes(name));
 }

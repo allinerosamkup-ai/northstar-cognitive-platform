@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planPrompt, parsePlan, partPrompt, buildCost } from "./blueprint.js";
+import { planPrompt, parsePlan, partPrompt, buildCost, runnerNote } from "./blueprint.js";
 
 const PLAN_REPLY = `## Files
 
@@ -108,4 +108,29 @@ test("The first file is written with nothing before it and says so by omission",
 test("The cost of a build is one call to plan, one per file, plus the repair", () => {
   assert.deepEqual(buildCost(4), { plan: 1, files: 4, repair: 3, total: 8 });
   assert.equal(buildCost(10, 0).total, 11);
+});
+
+// Found building a real project: asked for `node --test`, the model wrote a
+// suite importing `expect` from 'node:test', which does not export it — so the
+// module would not even load. It was guessing at the framework, because nothing
+// told it which one.
+test("The prompt names what the test runner actually provides", () => {
+  const plan = parsePlan("## Files\n\n- a.test.js — tests\n\n## Verify\n\nnode --test a.test.js");
+  const prompt = partPrompt({ description: "x", plan, path: "a.test.js", purpose: "tests", written: [] });
+
+  assert.match(prompt, /node --test/);
+  assert.match(prompt, /There is no `expect`/);
+  assert.match(prompt, /node:assert\/strict/);
+});
+
+test("Each runner is described in its own terms", () => {
+  assert.match(runnerNote("npx vitest run"), /from 'vitest'/);
+  assert.match(runnerNote("npx jest"), /are global; do not import them/);
+  assert.match(runnerNote("pytest -q"), /test_\*/);
+  assert.match(runnerNote("go test ./..."), /testing/);
+});
+
+test("An unfamiliar command adds nothing rather than guessing", () => {
+  assert.equal(runnerNote("./build.sh"), null);
+  assert.equal(runnerNote(null), null);
 });

@@ -112,19 +112,23 @@ export function createRunner({ cwd, allowed = DEFAULT_ALLOWED, timeout = RUN_TIM
   };
 }
 
-// What a model is shown when a command failed: enough to fix it, trimmed from
-// the end because that is where a stack trace and the real error live.
+// What a model is shown when a command failed. Long output is trimmed from the
+// middle, not the end: an assertion puts the useful part last, but a module that
+// failed to load puts it first and fills the rest with runtime internals. Keeping
+// only one end loses whichever kind this was.
 export function failureReport(result, limit = 6000) {
-  const tail = text => {
+  const trim = text => {
     const clean = String(text ?? "").trim();
-    return clean.length > limit ? `…${clean.slice(-limit)}` : clean;
+    if (clean.length <= limit) return clean;
+    const half = Math.floor(limit / 2);
+    return `${clean.slice(0, half)}\n\n[… ${clean.length - limit} characters omitted …]\n\n${clean.slice(-half)}`;
   };
   return [
     `COMMAND\n\n${result.command}`,
-    result.timedOut ? `It was still running after the time limit and was stopped.` : `It exited with code ${result.exitCode}.`,
+    result.timedOut ? "It was still running after the time limit and was stopped." : `It exited with code ${result.exitCode}.`,
     result.failure ? `PROBLEM STARTING IT\n\n${result.failure}` : null,
-    result.stderr?.trim() ? `STANDARD ERROR\n\n${tail(result.stderr)}` : null,
-    result.stdout?.trim() ? `STANDARD OUTPUT\n\n${tail(result.stdout)}` : null
+    result.stderr?.trim() ? `STANDARD ERROR\n\n${trim(result.stderr)}` : null,
+    result.stdout?.trim() ? `STANDARD OUTPUT\n\n${trim(result.stdout)}` : null
   ].filter(Boolean).join("\n\n");
 }
 
@@ -147,15 +151,13 @@ async function launch(program, args, cwd) {
   const executable = await resolveExecutable(program);
 
   // Node refuses to spawn a .cmd without a shell, because cmd.exe re-parses what
-  // it is handed. Every token has already been refused if it carries a shell
-  // character, so there is nothing left for it to reinterpret.
+  // it is handed. Every argument is quoted and its own quotes doubled, so there
+  // is nothing left for it to reinterpret.
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
     return spawn(process.env.COMSPEC ?? "cmd.exe",
       // With /s, cmd strips the first and last quote of what follows /c and takes
       // the rest verbatim — so the whole line needs one more pair around it, or a
       // path containing a space is read as two words.
-      // cmd doubles a quote to mean a literal one, so an argument carrying quotes
-      // arrives whole instead of ending its own quoting early.
       ["/d", "/s", "/c", `""${executable}" ${args.map(argument => `"${argument.replace(/"/g, '""')}"`).join(" ")}"`],
       { cwd, shell: false, windowsHide: true, windowsVerbatimArguments: true });
   }

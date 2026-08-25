@@ -21,6 +21,13 @@ export class DemoProvider {
 
   async work(request) {
     if (request.kind === "build") return { text: this.#document(request) };
+    // A stand-in that appears to know what "done" means is worse than one that
+    // says it cannot: the build would then measure itself against nothing and
+    // call the result finished.
+    if (request.kind === "requirements") return { text: "## Requirements\n" };
+    if (request.kind === "review") return { text: "" };
+    if (request.kind === "acceptance") return { text: "" };
+
     // Echoing the prompt back would have the plan parser read the example line
     // out of the instructions and try to build a file called "path/to/file.ext".
     // A stand-in has nothing to plan, and says so.
