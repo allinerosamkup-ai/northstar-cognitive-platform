@@ -664,3 +664,22 @@ test("A rewrite that makes things worse does not poison the next attempt", async
       "the file it started from is the file it ends with");
   });
 });
+
+// Building one file is not building software. This is the difference: the parts
+// are planned, written so they agree with each other, and only a command decides
+// whether any of it is true.
+test("A project is planned before anything is written", async () => {
+  await serving(async base => {
+    const response = await postJson(`${base}/api/project`, { description: "  " });
+    assert.equal(response.status, 400, "there is nothing to plan from");
+  });
+});
+
+test("A plan nothing usable came back from is reported, not half-built", async () => {
+  await serving(async base => {
+    // In demo mode no resident can plan, so nothing should land on disk.
+    const response = await postJson(`${base}/api/project`, { description: "a shopping list" });
+    assert.equal(response.status, 422);
+    assert.match((await response.json()).error, /No usable plan/);
+  });
+});

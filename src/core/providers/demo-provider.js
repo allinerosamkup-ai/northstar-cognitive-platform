@@ -21,9 +21,25 @@ export class DemoProvider {
 
   async work(request) {
     if (request.kind === "build") return { text: this.#document(request) };
-    // A stand-in cannot repair anything, so it proposes no edits. Saying that
-    // plainly ends a fix loop at once, instead of spending attempts on an answer
-    // that was never going to change.
+    // Echoing the prompt back would have the plan parser read the example line
+    // out of the instructions and try to build a file called "path/to/file.ext".
+    // A stand-in has nothing to plan, and says so.
+    if (request.kind === "plan") {
+      return {
+        text: [
+          "## Files",
+          "",
+          "(none — a language model is needed to plan this. Add an API key in Settings.)",
+          "",
+          "## Verify",
+          "",
+          "## Notes"
+        ].join("\n")
+      };
+    }
+    // A stand-in cannot repair anything either, so it proposes no edits. Saying
+    // that plainly ends a fix loop at once, instead of spending attempts on an
+    // answer that was never going to change.
     if (request.kind === "repair") {
       return { text: "No edits: a language model is needed to repair this. Add an API key in Settings." };
     }

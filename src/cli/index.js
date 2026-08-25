@@ -33,6 +33,9 @@ RUNNING
   fix -- <command>                Run it; while it fails, the files it blames are rewritten
   fix <files> -- <command>        The same, but you say which files may change
 
+BUILDING SOFTWARE
+  create <what to build>          Plan the parts, write them all, run it, fix it until it passes
+
 BUILDING
   build <instruction>             Produce the next revision of the project document
   document                        Print the current document
@@ -62,6 +65,7 @@ OPTIONS
   --with <ids>                    Comma-separated residents, e.g. --with gpt,claude
   --by <id>                       Which resident writes the conclusion, split or fix
   --attempts <n>                  How many times a fix may retry (default 3, max 6)
+  --verify <command>              What proves a created project works, if the plan names none
   --json                          Machine-readable output for scripts
 
   Set COGNITIVE_API_URL to reach a server on another port or host.
@@ -77,6 +81,7 @@ for (let index = 0; index < argv.length; index += 1) {
   if (argument === "--json") options.json = true;
   else if (argument === "--topology") options.topology = argv[++index];
   else if (argument === "--with") options.with = argv[++index]?.split(",").map(item => item.trim()).filter(Boolean);
+  else if (argument === "--verify") options.verify = argv[++index];
   else if (argument === "--name") options.name = argv[++index];
   else if (argument === "--staged") options.staged = true;
   else if (argument === "--yes") options.yes = true;
@@ -309,6 +314,52 @@ const COMMANDS = {
       console.log(`\nStill failing after ${value.attempts.length} ${value.attempts.length === 1 ? "attempt" : "attempts"}.`);
       if (value.reverted.length) console.log(`Put back as they were: ${value.reverted.join(", ")}`);
       console.log(`\n${(value.result.stderr || value.result.stdout || value.result.failure || "").trim().slice(-1200)}`);
+      process.exitCode = 1;
+    }
+  },
+
+  // The whole point: not a file, a working system. Plan, write every part so
+  // they agree with each other, run the command that proves it, and repair until
+  // it passes — because a build nobody ran is not a build that works.
+  async create() {
+    const description = requireText(joined, "A description of what to build");
+
+    console.log("Planning the parts…");
+    const value = await client.project(description, options.by);
+    if (options.json) return out(value);
+
+    console.log(`\n${value.plan.files.length} files planned:`);
+    for (const file of value.plan.files) console.log(`  ${file.path.padEnd(34)} ${file.purpose}`);
+    if (value.plan.notes) console.log(`\nWhat they must agree on:\n${value.plan.notes.split("\n").map(line => `  ${line}`).join("\n")}`);
+
+    console.log(`\nWritten:`);
+    for (const file of value.written) console.log(`  ${file.path.padEnd(34)} ${file.size} bytes`);
+    for (const failure of value.failed) console.log(`  ${failure.path.padEnd(34)} failed — ${failure.error}`);
+
+    const command = options.verify ?? value.plan.verify;
+    if (!command) {
+      console.log(`\nNothing to run: the plan named no command that proves it works.`);
+      console.log(`Give one with --verify "<command>" to have it checked and repaired.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`\nRunning "${command}"…`);
+    const repaired = await client.fix([], command, options.attempts, options.by);
+    for (const attempt of repaired.attempts) {
+      if (attempt.refused) console.log(`  attempt ${attempt.attempt}: the edit did not match — ${attempt.refused}`);
+      else if (attempt.noEdits) console.log(`  attempt ${attempt.attempt}: no edits proposed, so it stopped`);
+      else if (attempt.noFilesFound) console.log(`  attempt ${attempt.attempt}: the failure named no file in this project`);
+      else if (attempt.unchanged) console.log(`  attempt ${attempt.attempt}: nothing changed, so it stopped`);
+      else console.log(`  attempt ${attempt.attempt}: changed ${(attempt.changed ?? []).join(", ")} \u2014 ${attempt.ok ? "passed" : "still failing"}`);
+    }
+
+    if (repaired.fixed) {
+      console.log(`\nIt works. "${command}" passes.`);
+    } else {
+      console.log(`\nIt does not work yet. "${command}" still fails:\n`);
+      console.log((repaired.result.stderr || repaired.result.stdout || repaired.result.failure || "").trim().slice(-1200));
+      console.log(`\nThe files are on disk to look at. Run "fix -- ${command}" to try again.`);
       process.exitCode = 1;
     }
   },

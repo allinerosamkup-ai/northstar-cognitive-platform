@@ -11,6 +11,7 @@ import { Settings } from "./settings.js";
 import { createRunner, failureReport, CommandRejectedError, DEFAULT_ALLOWED } from "./runner.js";
 import { createGit, branchName, GitRejectedError, NotARepositoryError } from "./git.js";
 import { filesInFailure, relatedFiles, editPrompt, parseEdits, applyEdits, EditNotApplicableError } from "../core/failure.js";
+import { planPrompt, parsePlan, partPrompt, buildCost } from "../core/blueprint.js";
 import { parseRevision, proposedFiles, nextRevision, buildPrompt, filePrompt, fileFromReply } from "../core/document.js";
 import { WorkingSession } from "../core/session.js";
 import { callCount } from "../core/deliberation.js";
@@ -429,6 +430,63 @@ ${result.stdout}`, { known: tree });
         });
         return json(response, 200, {
           fixed: result.ok, attempts, reverted, result, by: author.id, snapshot: await snapshot()
+        });
+      }
+      // Building software, rather than building a file. The parts are planned
+      // first, each is written knowing the plan and everything written before it
+      // so they agree with each other, and then a command decides whether any of
+      // it is true. Nothing here is finished because a model said so.
+      if (request.method === "POST" && url.pathname === "/api/project") {
+        const input = await body(request);
+        if (!input.description?.trim()) return json(response, 400, { error: "Say what to build" });
+
+        const author = input.by
+          ? mesh.resident(project.id, input.by)
+          : mesh.residents(project.id).find(resident => resident.provider.apiKey) ?? mesh.residents(project.id)[0];
+        if (!author) return json(response, 400, { error: "No resident is available to build it" });
+
+        const description = input.description.trim();
+        const version = () => brain.getState(project.id).then(state => state.version);
+        const ask = async (prompt, kind) => (await author.provider.work({
+          taskId: `project:${kind}`, projectVersion: await version(), prompt, kind, instruction: description
+        })).text;
+
+        const plan = parsePlan(await ask(planPrompt({ description, tree: await workspace.tree() }), "plan"));
+        if (!plan.files.length) {
+          return json(response, 422, { error: "No usable plan came back. Try describing the project more concretely." });
+        }
+        await mesh.publish(project.id, {
+          type: "project.planned", actorId: author.id,
+          payload: { description, files: plan.files, verify: plan.verify, notes: plan.notes }
+        });
+
+        // Written in the planned order and carried forward, so a file that
+        // imports another was written after it and has seen it.
+        const written = [];
+        const failures = [];
+        for (const file of plan.files) {
+          try {
+            const content = fileFromReply(
+              await ask(partPrompt({ description, plan, path: file.path, purpose: file.purpose, written }), "file"),
+              file.path
+            );
+            const result = await workspace.write(file.path, content, { overwrite: true });
+            written.push({ path: file.path, content, size: result.size });
+          } catch (error) {
+            failures.push({ path: file.path, error: error.message });
+          }
+        }
+        await mesh.publish(project.id, {
+          type: "project.built", actorId: author.id,
+          payload: { description, written: written.map(file => file.path), failed: failures }
+        });
+
+        return json(response, 201, {
+          plan,
+          written: written.map(file => ({ path: file.path, size: file.size })),
+          failed: failures,
+          cost: buildCost(plan.files.length),
+          snapshot: await snapshot()
         });
       }
       // Producing one working file, where the contract is explicit: the reply is

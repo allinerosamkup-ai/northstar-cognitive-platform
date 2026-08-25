@@ -51,6 +51,7 @@ export class CognitiveClient {
   commit(message, paths) { return this.#send("/api/git/commit", { message, paths }); }
   diff(staged) { return this.#request(`/api/git/diff${staged ? "?staged=true" : ""}`); }
   discard(paths) { return this.#send("/api/git/discard", { paths }); }
+  project(description, by) { return this.#send("/api/project", { description, by }); }
   agents() { return this.#request("/api/agents"); }
   hire(agent) { return this.#send("/api/agents", agent); }
   dismiss(id) { return this.#send("/api/agents", { id }, "DELETE"); }

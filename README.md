@@ -45,7 +45,8 @@ of it.
 | **Talk to the project** | Ask a question; one model or all of them answer, and every model hears the reply whether it spoke or not |
 | **Hold a session** | They propose, read each other, respond, and one writes the conclusion — you accept it or overrule it |
 | **Divide the work** | Each argues for the part it is best placed to own; you approve the split |
-| **Build files** | `make path/to/file "what it should do"` writes a real file to disk |
+| **Build a system** | `create "what to build"` plans the parts, writes them so they agree with each other, runs it, and repairs until it passes |
+| **Build one file** | `make path/to/file "what it should do"` writes a real file to disk |
 | **Run and repair** | `fix -- npm test` runs it, reads the failure, follows the imports to the file actually at fault, rewrites it, and runs it again |
 | **Edit alongside them** | A file tree and editor in the browser, saving to the same workspace |
 | **Dedicated agents** | Give an agent a role and a part of the project it owns |
@@ -58,6 +59,8 @@ Read this before deciding whether it fits your work.
 
 - **It is a prototype.** One project per instance, no authentication, no
   multi-tenancy, no secret management beyond a local `.env`.
+- **A build is one pass.** It plans, writes and repairs once. It does not come
+  back later, reconsider the plan, or notice that a requirement went unbuilt.
 - **Repair is bounded.** It follows imports from the failing file, up to eight
   files, and retries three times by default. A failure spread across a large
   codebase will exhaust that.
@@ -129,6 +132,7 @@ npm run cli -- conclude      # accept the conclusion, or write your own
 npm run cli -- divide "A|B"  # they argue for parts of the work
 
 # building
+npm run cli -- create "what to build"   # plan, write every part, run it, repair
 npm run cli -- make src/x.js "what it should do"
 npm run cli -- run "npm test"
 npm run cli -- fix -- npm test
@@ -249,7 +253,39 @@ one. Only a listed set of subcommands can run: `push`, `remote`, `config` and
 `reset` are deliberately absent, so this is a way to work in a repository and
 not a way to reach arbitrary git.
 
-## Building something
+## Building software
+
+Writing one file is not building software. A system is several files that have
+to agree with each other — the names they export, the paths they import, the
+shape of what they pass around — and a file written in isolation agrees with
+nothing.
+
+```sh
+npm run cli -- create "a library lending system in plain JavaScript: add a book,
+  lend it to a person, return it, and refuse to lend one that is already out.
+  Include tests covering each rule."
+```
+
+What happens:
+
+1. **Plan.** What the files are, what each is responsible for, in the order they
+   should be written, and what command proves the whole thing works.
+2. **Write.** Each file is written knowing the plan and every file written before
+   it, so the imports resolve and the names line up. That is the mechanism for
+   coherence — not a model remembering across requests it never sees together.
+3. **Run.** The command from the plan, or your own with `--verify`.
+4. **Repair.** While it fails, the loop above runs, editing whatever files the
+   failure implicates.
+
+Nothing is finished because a model said so. If the command does not pass, it
+says so and leaves the files on disk to look at.
+
+Asked for the lending system above, it planned four files, wrote them, found a
+failure, and repaired it. The rules held under a test written separately from
+the ones it generated — including refusing to lend a book that does not exist,
+which nobody had asked it to handle.
+
+## Building one file
 
 The **Document** view is where the intelligences produce work rather than talk
 about it. Give an instruction and they return a full revision of the project
