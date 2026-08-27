@@ -109,6 +109,12 @@ Open `http://127.0.0.1:4310`, type a question and press **Enter**. The six views
 in the left rail — conversation, project brain, working session, document,
 workspace editor, settings — are all live against the same project.
 
+To run the server on another port, pass `--port`:
+
+```sh
+npm start -- --port 5000
+```
+
 What demo mode cannot show you is the part that matters: a stand-in cannot write
 code, reconcile a disagreement, or repair a failing test. It returns files
 unchanged and says so, which is honest and ends a repair loop immediately. Add a
